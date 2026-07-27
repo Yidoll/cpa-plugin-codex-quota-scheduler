@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"sort"
+	"strconv"
 	"time"
 )
 
@@ -39,21 +41,35 @@ const (
 )
 
 type AccountView struct {
-	ID                   string
-	AuthIndex            string
-	Instance             AuthInstanceID
-	PluginPriority       int
-	Family               AccountFamily
-	Cache                CacheClass
-	LastKnownAvailable   bool
-	Exhausted            bool
-	ResetAt              time.Time
-	AuthBlocked          bool
-	Circuit              CircuitClass
-	TemporaryUnavailable bool
-	Trial                TrialState
-	Expiry               time.Time
-	RemainingQuota       float64
+	ID                    string
+	AuthIndex             string
+	Instance              AuthInstanceID
+	PluginPriority        int
+	Family                AccountFamily
+	Cache                 CacheClass
+	LastKnownAvailable    bool
+	Exhausted             bool
+	ResetAt               time.Time
+	AuthBlocked           bool
+	Circuit               CircuitClass
+	TemporaryUnavailable  bool
+	Trial                 TrialState
+	Expiry                time.Time
+	RemainingQuota        float64
+	PlanType              string
+	SubscriptionExpiresAt time.Time
+	QuotaScore            QuotaScore
+}
+
+func effectivePlanType(quotaPlan, identityPlan string) string {
+	if normalized := normalizePlanType(quotaPlan); normalized != "" {
+		return normalized
+	}
+	return normalizePlanType(identityPlan)
+}
+
+func futureSubscriptionExpiry(expiresAt, now time.Time) (time.Time, bool) {
+	return expiresAt, !expiresAt.IsZero() && expiresAt.After(now)
 }
 
 type Candidate struct{ ID, Provider string }
@@ -120,7 +136,8 @@ func selectAccountSkipping(snapshot SchedulerSnapshot, candidates []Candidate, n
 	}
 	for _, class := range []AvailabilityClass{Preferred, Opportunistic} {
 		accounts := byClass[class]
-		sort.Slice(accounts, func(i, j int) bool { return accountViewLess(accounts[i], accounts[j], snapshot.MonthlyMode) })
+		policy := SelectionPolicy{Strategy: snapshot.SelectionStrategy, MonthlyMode: snapshot.MonthlyMode, SubscriptionRanks: snapshot.SubscriptionRanks, Now: now}
+		sort.Slice(accounts, func(i, j int) bool { return accountViewLess(accounts[i], accounts[j], policy) })
 		if len(accounts) > 0 {
 			result := SelectionResult{AuthID: accounts[0].ID, Instance: accounts[0].Instance, Class: class, Trial: class == Opportunistic, Reason: "selected", Ordered: accounts}
 			if result.Trial {
@@ -132,10 +149,86 @@ func selectAccountSkipping(snapshot SchedulerSnapshot, candidates []Candidate, n
 	return SelectionResult{Reason: "no_selectable_account", Fallback: snapshot.Fallback == FallbackFillFirst}
 }
 
-func accountViewLess(a, b AccountView, mode MonthlyMode) bool {
+type SelectionPolicy struct {
+	Strategy          SelectionStrategy
+	MonthlyMode       MonthlyMode
+	SubscriptionRanks map[string]int
+	Now               time.Time
+}
+
+func subscriptionRanks(order []string) map[string]int {
+	if len(order) == 0 {
+		return nil
+	}
+	ranks := make(map[string]int, len(order))
+	for rank, plan := range order {
+		ranks[normalizePlanType(plan)] = rank
+	}
+	return ranks
+}
+
+func accountViewLess(a, b AccountView, policy SelectionPolicy) bool {
 	if a.PluginPriority != b.PluginPriority {
 		return a.PluginPriority > b.PluginPriority
 	}
+	switch policy.Strategy {
+	case SelectionStrategyQuotaHigh, SelectionStrategyQuotaLow:
+		if a.QuotaScore.Known != b.QuotaScore.Known {
+			return a.QuotaScore.Known
+		}
+		if a.QuotaScore.Known && a.QuotaScore.Remaining != b.QuotaScore.Remaining {
+			if policy.Strategy == SelectionStrategyQuotaHigh {
+				return a.QuotaScore.Remaining > b.QuotaScore.Remaining
+			}
+			return a.QuotaScore.Remaining < b.QuotaScore.Remaining
+		}
+	case SelectionStrategySubscriptionHigh, SelectionStrategySubscriptionLow:
+		aRank, aKnown := policy.SubscriptionRanks[normalizePlanType(a.PlanType)]
+		bRank, bKnown := policy.SubscriptionRanks[normalizePlanType(b.PlanType)]
+		if aKnown != bKnown {
+			return aKnown
+		}
+		if aKnown && aRank != bRank {
+			if policy.Strategy == SelectionStrategySubscriptionHigh {
+				return aRank > bRank
+			}
+			return aRank < bRank
+		}
+	case SelectionStrategyExpirySoon:
+		aExpiry, aKnown := futureSubscriptionExpiry(a.SubscriptionExpiresAt, policy.Now)
+		bExpiry, bKnown := futureSubscriptionExpiry(b.SubscriptionExpiresAt, policy.Now)
+		if aKnown != bKnown {
+			return aKnown
+		}
+		if aKnown && !aExpiry.Equal(bExpiry) {
+			return aExpiry.Before(bExpiry)
+		}
+	default:
+		return legacyAccountViewLess(a, b, policy.MonthlyMode)
+	}
+	return a.ID < b.ID
+}
+
+func strategySortValue(account AccountView, policy SelectionPolicy) (bool, string) {
+	switch policy.Strategy {
+	case SelectionStrategyQuotaHigh, SelectionStrategyQuotaLow:
+		if account.QuotaScore.Known {
+			return true, strconv.FormatFloat(account.QuotaScore.Remaining, 'f', -1, 64) + "%"
+		}
+	case SelectionStrategySubscriptionHigh, SelectionStrategySubscriptionLow:
+		plan := normalizePlanType(account.PlanType)
+		if rank, known := policy.SubscriptionRanks[plan]; known {
+			return true, fmt.Sprintf("%s (rank %d)", plan, rank)
+		}
+	case SelectionStrategyExpirySoon:
+		if expiresAt, known := futureSubscriptionExpiry(account.SubscriptionExpiresAt, policy.Now); known {
+			return true, expiresAt.UTC().Format(time.RFC3339)
+		}
+	}
+	return false, "unknown"
+}
+
+func legacyAccountViewLess(a, b AccountView, mode MonthlyMode) bool {
 	if mode == MonthlyModePriority && a.Family != b.Family {
 		return a.Family == AccountFamilyMonthly
 	}

@@ -24,7 +24,7 @@ type PluginState struct {
 
 func NewPluginState(cfg Config) *PluginState {
 	return &PluginState{
-		cfg:         NormalizeConfig(cfg),
+		cfg:         cloneConfig(NormalizeConfig(cfg)),
 		accounts:    make(map[string]AccountState),
 		annotations: NormalizeAnnotationState(AnnotationState{}),
 	}
@@ -71,16 +71,21 @@ func (s *PluginState) applyLegacyEffectJournal(j LegacyEffectJournal) {
 	s.logs = append(s.logs, cloneLogs(j.Logs)...)
 }
 
-func (s *PluginState) ReplaceConfig(cfg Config) {
+func (s *PluginState) ReplaceConfig(cfg Config) error {
+	cfg, err := ValidateConfig(cfg)
+	if err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.cfg = NormalizeConfig(cfg)
+	s.cfg = cfg
+	return nil
 }
 
 func (s *PluginState) Config() Config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.cfg
+	return cloneConfig(s.cfg)
 }
 
 func (s *PluginState) SetAnnotations(state AnnotationState) {
@@ -498,7 +503,7 @@ func (s *PluginState) Snapshot(now time.Time) StateSnapshot {
 	accounts = ApplyAnnotations(accounts, s.annotations)
 
 	return StateSnapshot{
-		Config:              s.cfg,
+		Config:              cloneConfig(s.cfg),
 		Accounts:            accounts,
 		CPAAdmission:        cloneCPAAdmission(s.cpaAdmission),
 		CPAAdmissionVersion: s.cpaAdmissionVersion,

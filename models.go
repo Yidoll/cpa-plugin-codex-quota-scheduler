@@ -46,6 +46,31 @@ type ParsedQuota struct {
 	ResetCredits                 []ResetCredit `json:"reset_credits,omitempty"`
 }
 
+type QuotaScore struct {
+	Known     bool    `json:"known"`
+	Remaining float64 `json:"remaining"`
+}
+
+func bottleneckQuotaScore(quota ParsedQuota) QuotaScore {
+	var score QuotaScore
+	for _, window := range []*QuotaWindow{quota.FiveHour, quota.LongWindow} {
+		if window == nil || window.UsedPercent == nil {
+			continue
+		}
+		used := *window.UsedPercent
+		if used < 0 {
+			used = 0
+		} else if used > 100 {
+			used = 100
+		}
+		remaining := 100 - used
+		if !score.Known || remaining < score.Remaining {
+			score = QuotaScore{Known: true, Remaining: remaining}
+		}
+	}
+	return score
+}
+
 type CircuitState string
 
 const (
@@ -142,6 +167,9 @@ type AccountState struct {
 	Provider              string
 	Priority              int
 	ChatGPTAccountID      string
+	PlanType              string
+	SubscriptionExpiresAt time.Time
+	BottleneckQuota       QuotaScore
 	Family                AccountFamily
 	Quota                 ParsedQuota
 	LastRefreshAt         time.Time

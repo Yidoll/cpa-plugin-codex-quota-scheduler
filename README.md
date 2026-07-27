@@ -1,5 +1,29 @@
 # Codex Quota Scheduler
 
+## v0.3.0 configurable selection strategies
+
+v0.3.0 adds five explicit account-selection strategies while keeping the
+existing order when `selection_strategy` is empty:
+
+- `quota_high`: prefer the largest known bottleneck remaining quota.
+- `quota_low`: prefer the smallest known bottleneck remaining quota.
+- `subscription_high`: prefer the highest recognized subscription rank.
+- `subscription_low`: prefer the lowest recognized subscription rank.
+- `expiry_soon`: prefer the nearest known future subscription expiry.
+
+The bottleneck quota is the minimum remaining percentage across the known
+five-hour and long primary quota windows. Unknown quota, subscription, or
+future-expiry data remains eligible but sorts after known values.
+
+The fixed ordering layers are: CPA auth priority admission, availability class,
+per-account plugin priority, configured selection strategy, then Auth ID.
+`subscription_order` lists plan names from low to high and is required for both
+subscription strategies. Values are trimmed, lowercased, and must be unique.
+
+To roll back immediately, clear `selection_strategy`. The scheduler then uses
+the v0.2.x `monthly_mode`, quota reset/expiry, remaining quota, and Auth ID
+ordering. `monthly_mode` remains saved while a new strategy is active.
+
 ## v0.2.0 upgrade
 
 v0.2.0 automatically migrates the legacy state filename to `.user-data.json`
@@ -129,6 +153,8 @@ refresh_after_reset_delay: 1m
 refresh_retry_delays: 1m,5m,15m
 refresh_on_startup: false
 monthly_mode: expiry_order
+selection_strategy: ""
+subscription_order: []
 fallback: fill-first
 enable_usage_feedback: true
 max_refresh_concurrency: 1
@@ -146,6 +172,23 @@ log_retention: 24h
   within the same CPA priority tier.
 - `priority`: prefer monthly accounts before weekly accounts within the same CPA
   priority tier.
+
+`selection_strategy` accepts `quota_high`, `quota_low`, `subscription_high`,
+`subscription_low`, or `expiry_soon`. Leave it empty for the legacy behavior.
+For example, to prefer higher ranked subscriptions:
+
+```yaml
+selection_strategy: subscription_high
+subscription_order:
+  - free
+  - plus
+  - pro
+```
+
+The Management UI shows the active strategy value for every account, including
+the bottleneck quota, normalized plan/rank, subscription expiry, or an explicit
+unknown state. Strategy changes are validated before the previous configuration
+and immutable scheduler snapshot are replaced.
 
 While the scheduler is inside `refresh_active_window`,
 `quota_refresh_interval` is the normal per-account refresh cadence. The worker
@@ -236,7 +279,7 @@ make build
 Build and package the release zip:
 
 ```bash
-make package VERSION=0.2.0
+make package VERSION=0.3.0
 ```
 
 Generate an aggregate checksum file for local release assets:

@@ -811,6 +811,7 @@ func NewQuotaRefresher(host HostClient, state *PluginState, now func() time.Time
 				return nil
 			}
 			var applyErr error
+			var schedulingAccounts []AccountState
 			apply := func() {
 				for _, account := range result.Journal.Accounts {
 					if account.AuthID != intent.AuthID || account.LastSuccessAt.IsZero() || account.LastError != "" {
@@ -820,6 +821,7 @@ func NewQuotaRefresher(host HostClient, state *PluginState, now func() time.Time
 						applyErr = err
 						return
 					}
+					schedulingAccounts = append(schedulingAccounts, account)
 				}
 				r.state.applyLegacyEffectJournal(*result.Journal)
 			}
@@ -831,6 +833,10 @@ func NewQuotaRefresher(host HostClient, state *PluginState, now func() time.Time
 			}
 			if applyErr != nil {
 				return applyErr
+			}
+			publishSchedulerState(r.state, highestTierSet(r.runtimeRoster()), r.now())
+			if err := r.persistSchedulingAccounts(schedulingAccounts); err != nil {
+				return err
 			}
 			if err := r.bootstrapProbeWindows(); err != nil {
 				r.state.RecordLog("warn", "probe.bootstrap_failed", "Probe 状态初始化失败，将在下次刷新重试", map[string]any{"auth_id": intent.AuthID, "error": redactSecrets(err.Error())}, r.now())
@@ -1535,12 +1541,12 @@ func (r *QuotaRefresher) refreshAuthVersionedHeld(auth pluginapi.HostAuthFileEnt
 	}
 	account = r.mergeExistingAccount(account)
 	account.ChatGPTAccountID = credentials.ChatGPTAccountID
+	account.PlanType = effectivePlanType("", credentials.PlanType)
+	account.SubscriptionExpiresAt = credentials.SubscriptionExpiresAt
 	if credentials.ChatGPTAccountID == "" {
 		account.LastError = ""
 		account.Refresh = AccountRefreshState{}
-		if r.state.ApplyQuotaRefreshSuccessIfAdmissionCurrent(account, version, r.now()) {
-			publishSchedulerState(r.state, highestTierSet(r.runtimeRoster()), r.now())
-		}
+		r.state.ApplyQuotaRefreshSuccessIfAdmissionCurrent(account, version, r.now())
 		return
 	}
 	quota, err := r.fetchQuota(credentials, account.AuthID, version)
@@ -1567,13 +1573,16 @@ func (r *QuotaRefresher) refreshAuthVersionedHeld(auth pluginapi.HostAuthFileEnt
 	// S6: Probe deadlines run independently through ProbeController, including
 	// while normal refresh is Dormant. Keep legacy data readable, but never
 	// execute the old POST/post-read envelope.
+	quota.PlanType = effectivePlanType(quota.PlanType, credentials.PlanType)
 	account.Quota = quota
+	account.PlanType = quota.PlanType
+	account.SubscriptionExpiresAt = credentials.SubscriptionExpiresAt
+	account.BottleneckQuota = bottleneckQuotaScore(quota)
 	account.Family = quota.Family
 	account.LastError = ""
 	account.LastSuccessAt = r.now()
 	if r.state.ApplyQuotaRefreshSuccessIfAdmissionCurrent(account, version, r.now()) {
 		globalTrials.ObserveEvidence(account.Instance, Evidence{Kind: EvidenceReliableQuotaWriteback, At: r.now()})
-		publishSchedulerState(r.state, highestTierSet(r.runtimeRoster()), r.now())
 		r.recordAdmissionLog(account.AuthID, version, "info", "quota.refresh_success", "账号额度刷新成功", map[string]any{"auth_id": account.AuthID})
 	}
 }
@@ -1968,9 +1977,54 @@ func (r *QuotaRefresher) mergeExistingAccount(account AccountState) AccountState
 		if account.ChatGPTAccountID != "" {
 			merged.ChatGPTAccountID = account.ChatGPTAccountID
 		}
-		return merged
+		if merged.PlanType == "" {
+			merged.PlanType = account.PlanType
+		}
+		if merged.SubscriptionExpiresAt.IsZero() {
+			merged.SubscriptionExpiresAt = account.SubscriptionExpiresAt
+		}
+		account = merged
+		break
+	}
+	if r.runtimeStore != nil {
+		if persisted, err := r.runtimeStore.PersistentSnapshot(); err == nil {
+			if scheduling, ok := persisted.SchedulingAccounts[account.AuthID]; ok {
+				if account.PlanType == "" {
+					account.PlanType = normalizePlanType(scheduling.PlanType)
+				}
+				if account.SubscriptionExpiresAt.IsZero() {
+					account.SubscriptionExpiresAt = scheduling.SubscriptionExpiresAt
+				}
+				if !account.BottleneckQuota.Known {
+					account.BottleneckQuota = scheduling.BottleneckQuota
+				}
+			}
+		}
 	}
 	return account
+}
+
+func (r *QuotaRefresher) persistSchedulingAccounts(accounts []AccountState) error {
+	if r == nil || r.runtimeStore == nil || len(accounts) == 0 {
+		return nil
+	}
+	_, err := r.runtimeStore.Update(func(state *PersistentState) error {
+		if state.SchedulingAccounts == nil {
+			state.SchedulingAccounts = make(map[string]AccountSchedulingState)
+		}
+		for _, account := range accounts {
+			if account.AuthID == "" {
+				continue
+			}
+			state.SchedulingAccounts[account.AuthID] = AccountSchedulingState{
+				PlanType:              normalizePlanType(account.PlanType),
+				SubscriptionExpiresAt: account.SubscriptionExpiresAt,
+				BottleneckQuota:       account.BottleneckQuota,
+			}
+		}
+		return nil
+	})
+	return err
 }
 
 func accountStateFromAuth(auth pluginapi.HostAuthFileEntry, now time.Time) AccountState {

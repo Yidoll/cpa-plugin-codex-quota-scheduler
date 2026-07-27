@@ -18,12 +18,20 @@ const (
 	MonthlyModePriority    MonthlyMode = "priority"
 	MonthlyModeExpiryOrder MonthlyMode = "expiry_order"
 
+	SelectionStrategyQuotaHigh        SelectionStrategy = "quota_high"
+	SelectionStrategyQuotaLow         SelectionStrategy = "quota_low"
+	SelectionStrategySubscriptionHigh SelectionStrategy = "subscription_high"
+	SelectionStrategySubscriptionLow  SelectionStrategy = "subscription_low"
+	SelectionStrategyExpirySoon       SelectionStrategy = "expiry_soon"
+
 	FallbackFillFirst FallbackMode = "fill-first"
 )
 
-var pluginVersion = "0.2.0"
+var pluginVersion = "0.3.0"
 
 type MonthlyMode string
+
+type SelectionStrategy string
 
 type FallbackMode string
 
@@ -34,6 +42,8 @@ type Config struct {
 	// not own a normal-refresh deadline.
 	StaleAfter                      time.Duration
 	MonthlyMode                     MonthlyMode
+	SelectionStrategy               SelectionStrategy `json:"selection_strategy"`
+	SubscriptionOrder               []string          `json:"subscription_order"`
 	Fallback                        FallbackMode
 	EnableUsageFeedback             bool
 	EnableResetProbe                bool
@@ -64,25 +74,27 @@ type registrationCapabilities struct {
 }
 
 type rawConfig struct {
-	HandleEnabled                   *bool  `yaml:"handle_enabled"`
-	QuotaRefreshInterval            string `yaml:"quota_refresh_interval"`
-	StaleAfter                      string `yaml:"stale_after"`
-	MonthlyMode                     string `yaml:"monthly_mode"`
-	Fallback                        string `yaml:"fallback"`
-	EnableUsageFeedback             *bool  `yaml:"enable_usage_feedback"`
-	EnableResetProbe                *bool  `yaml:"enable_reset_probe"`
-	ProbeOnProvisionalRoster        *bool  `yaml:"probe_on_provisional_roster"`
-	MaxRefreshConcurrency           *int   `yaml:"max_refresh_concurrency"`
-	QuotaEndpoint                   string `yaml:"quota_endpoint"`
-	RefreshActiveWindow             string `yaml:"refresh_active_window"`
-	RefreshAfterResetDelay          string `yaml:"refresh_after_reset_delay"`
-	RefreshRetryDelays              string `yaml:"refresh_retry_delays"`
-	RefreshOnStartup                *bool  `yaml:"refresh_on_startup"`
-	CircuitFailureThreshold         *int   `yaml:"circuit_failure_threshold"`
-	CircuitOpenDuration             string `yaml:"circuit_open_duration"`
-	CircuitHalfOpenSuccessThreshold *int   `yaml:"circuit_half_open_success_threshold"`
-	MaxLogEntries                   *int   `yaml:"max_log_entries"`
-	LogRetention                    string `yaml:"log_retention"`
+	HandleEnabled                   *bool    `yaml:"handle_enabled"`
+	QuotaRefreshInterval            string   `yaml:"quota_refresh_interval"`
+	StaleAfter                      string   `yaml:"stale_after"`
+	MonthlyMode                     string   `yaml:"monthly_mode"`
+	SelectionStrategy               string   `yaml:"selection_strategy"`
+	SubscriptionOrder               []string `yaml:"subscription_order"`
+	Fallback                        string   `yaml:"fallback"`
+	EnableUsageFeedback             *bool    `yaml:"enable_usage_feedback"`
+	EnableResetProbe                *bool    `yaml:"enable_reset_probe"`
+	ProbeOnProvisionalRoster        *bool    `yaml:"probe_on_provisional_roster"`
+	MaxRefreshConcurrency           *int     `yaml:"max_refresh_concurrency"`
+	QuotaEndpoint                   string   `yaml:"quota_endpoint"`
+	RefreshActiveWindow             string   `yaml:"refresh_active_window"`
+	RefreshAfterResetDelay          string   `yaml:"refresh_after_reset_delay"`
+	RefreshRetryDelays              string   `yaml:"refresh_retry_delays"`
+	RefreshOnStartup                *bool    `yaml:"refresh_on_startup"`
+	CircuitFailureThreshold         *int     `yaml:"circuit_failure_threshold"`
+	CircuitOpenDuration             string   `yaml:"circuit_open_duration"`
+	CircuitHalfOpenSuccessThreshold *int     `yaml:"circuit_half_open_success_threshold"`
+	MaxLogEntries                   *int     `yaml:"max_log_entries"`
+	LogRetention                    string   `yaml:"log_retention"`
 }
 
 func DefaultConfig() Config {
@@ -153,6 +165,43 @@ func NormalizeConfig(cfg Config) Config {
 	return cfg
 }
 
+func cloneConfig(cfg Config) Config {
+	cfg.SubscriptionOrder = append([]string(nil), cfg.SubscriptionOrder...)
+	cfg.RefreshRetryDelays = append([]time.Duration(nil), cfg.RefreshRetryDelays...)
+	return cfg
+}
+
+func ValidateConfig(cfg Config) (Config, error) {
+	cfg = NormalizeConfig(cfg)
+	switch cfg.SelectionStrategy {
+	case "", SelectionStrategyQuotaHigh, SelectionStrategyQuotaLow, SelectionStrategySubscriptionHigh, SelectionStrategySubscriptionLow, SelectionStrategyExpirySoon:
+	default:
+		return Config{}, fmt.Errorf("selection_strategy must be one of %q, %q, %q, %q, or %q", SelectionStrategyQuotaHigh, SelectionStrategyQuotaLow, SelectionStrategySubscriptionHigh, SelectionStrategySubscriptionLow, SelectionStrategyExpirySoon)
+	}
+
+	var normalizedOrder []string
+	if len(cfg.SubscriptionOrder) > 0 {
+		normalizedOrder = make([]string, 0, len(cfg.SubscriptionOrder))
+	}
+	seen := make(map[string]struct{}, len(cfg.SubscriptionOrder))
+	for _, item := range cfg.SubscriptionOrder {
+		item = strings.ToLower(strings.TrimSpace(item))
+		if item == "" {
+			return Config{}, fmt.Errorf("subscription_order contains an empty item")
+		}
+		if _, exists := seen[item]; exists {
+			return Config{}, fmt.Errorf("subscription_order contains duplicate item %q", item)
+		}
+		seen[item] = struct{}{}
+		normalizedOrder = append(normalizedOrder, item)
+	}
+	cfg.SubscriptionOrder = normalizedOrder
+	if (cfg.SelectionStrategy == SelectionStrategySubscriptionHigh || cfg.SelectionStrategy == SelectionStrategySubscriptionLow) && len(cfg.SubscriptionOrder) == 0 {
+		return Config{}, fmt.Errorf("subscription_order is required for selection_strategy %q", cfg.SelectionStrategy)
+	}
+	return cloneConfig(cfg), nil
+}
+
 func DecodeConfig(raw []byte) (Config, error) {
 	cfg := DefaultConfig()
 	if len(raw) == 0 {
@@ -192,6 +241,8 @@ func DecodeConfig(raw []byte) (Config, error) {
 	if cfg.MonthlyMode != MonthlyModePriority && cfg.MonthlyMode != MonthlyModeExpiryOrder {
 		return Config{}, fmt.Errorf("monthly_mode must be %q or %q", MonthlyModePriority, MonthlyModeExpiryOrder)
 	}
+	cfg.SelectionStrategy = SelectionStrategy(strings.ToLower(strings.TrimSpace(decoded.SelectionStrategy)))
+	cfg.SubscriptionOrder = append([]string(nil), decoded.SubscriptionOrder...)
 	if decoded.Fallback != "" {
 		cfg.Fallback = FallbackMode(decoded.Fallback)
 	}
@@ -288,7 +339,7 @@ func DecodeConfig(raw []byte) (Config, error) {
 		}
 		cfg.LogRetention = d
 	}
-	return NormalizeConfig(cfg), nil
+	return ValidateConfig(cfg)
 }
 
 func normalizeRetryDelays(values, fallback []time.Duration) []time.Duration {

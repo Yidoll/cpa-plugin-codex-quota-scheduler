@@ -77,8 +77,14 @@ func configure(raw []byte) error {
 	} else {
 		disk = PluginDiskState{Config: cfg}
 	}
-	currentConfig.Store(cfg)
-	globalState.ReplaceConfig(cfg)
+	cfg, err = ValidateConfig(cfg)
+	if err != nil {
+		return err
+	}
+	if err := globalState.ReplaceConfig(cfg); err != nil {
+		return err
+	}
+	currentConfig.Store(cloneConfig(cfg))
 	globalState.SetAnnotations(AnnotationState{Accounts: disk.Accounts, Groups: disk.Groups})
 	startEvidenceConsumer()
 	publishSchedulerState(globalState, nil, time.Now())
@@ -132,10 +138,13 @@ func logSchedulerDecision(store *PluginState, req pluginapi.SchedulerPickRequest
 	event := "scheduler.unhandled"
 	message := "请求未由插件接管"
 	fields := map[string]any{
-		"model":         req.Model,
-		"provider":      req.Provider,
-		"reason":        decision.Reason,
-		"ordered_count": len(decision.Ordered),
+		"model":              req.Model,
+		"provider":           req.Provider,
+		"reason":             decision.Reason,
+		"ordered_count":      len(decision.Ordered),
+		"selection_strategy": decision.Strategy,
+		"strategy_known":     decision.StrategyKnown,
+		"strategy_value":     decision.StrategyValue,
 	}
 	if decision.AuthID != "" {
 		event = "scheduler.selected"

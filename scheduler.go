@@ -13,6 +13,9 @@ type PickDecision struct {
 	DelegateBuiltin string
 	Reason          string
 	Ordered         []ScheduledAccount
+	Strategy        SelectionStrategy
+	StrategyKnown   bool
+	StrategyValue   string
 }
 
 type ScheduledAccount struct {
@@ -85,11 +88,13 @@ func PickCodexAccount(req pluginapi.SchedulerPickRequest, snapshot StateSnapshot
 	}
 	for _, account := range ordered {
 		if account.Available {
+			known, value := strategySortValue(account.selectionView, SelectionPolicy{Strategy: snapshot.Config.SelectionStrategy, MonthlyMode: snapshot.Config.MonthlyMode, SubscriptionRanks: subscriptionRanks(snapshot.Config.SubscriptionOrder), Now: now})
 			return PickDecision{
-				AuthID:  account.AuthID,
-				Handled: true,
-				Reason:  "selected",
-				Ordered: ordered,
+				AuthID:   account.AuthID,
+				Handled:  true,
+				Reason:   "selected",
+				Ordered:  ordered,
+				Strategy: snapshot.Config.SelectionStrategy, StrategyKnown: known, StrategyValue: value,
 			}
 		}
 	}
@@ -178,13 +183,14 @@ func buildOrderedAccounts(req pluginapi.SchedulerPickRequest, snapshot StateSnap
 		})
 	}
 
+	policy := SelectionPolicy{Strategy: snapshot.Config.SelectionStrategy, MonthlyMode: snapshot.Config.MonthlyMode, SubscriptionRanks: subscriptionRanks(snapshot.Config.SubscriptionOrder), Now: now}
 	sort.SliceStable(ordered, func(i, j int) bool {
 		left, right := ordered[i], ordered[j]
 		if left.selectionClass != right.selectionClass {
 			return left.selectionClass < right.selectionClass
 		}
 		if left.selectionClass != Excluded {
-			return accountViewLess(left.selectionView, right.selectionView, snapshot.Config.MonthlyMode)
+			return accountViewLess(left.selectionView, right.selectionView, policy)
 		}
 		if !left.SortTime.Equal(right.SortTime) {
 			if left.SortTime.IsZero() {

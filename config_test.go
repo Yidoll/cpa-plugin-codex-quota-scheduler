@@ -49,9 +49,9 @@ func TestProbeOnProvisionalRosterIsExplicitRiskOption(t *testing.T) {
 	}
 }
 
-func TestPluginRegistrationUsesV020SourceVersion(t *testing.T) {
-	if got := PluginRegistration().Metadata.Version; got != "0.2.0" {
-		t.Fatalf("plugin registration version = %q, want 0.2.0", got)
+func TestPluginRegistrationUsesV030SourceVersion(t *testing.T) {
+	if got := PluginRegistration().Metadata.Version; got != "0.3.0" {
+		t.Fatalf("plugin registration version = %q, want 0.3.0", got)
 	}
 }
 

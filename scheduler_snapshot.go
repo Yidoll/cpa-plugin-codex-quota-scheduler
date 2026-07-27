@@ -11,6 +11,8 @@ type SchedulerSnapshot struct {
 	HandleEnabled     bool
 	Fallback          FallbackMode
 	MonthlyMode       MonthlyMode
+	SelectionStrategy SelectionStrategy
+	SubscriptionRanks map[string]int
 	Accounts          []AccountView
 	ActiveHighestTier map[string]struct{}
 	Trials            *TrialRegistry
@@ -38,7 +40,19 @@ func PublishSchedulerSnapshot(snapshot *SchedulerSnapshot) {
 func cloneSchedulerSnapshot(s SchedulerSnapshot) SchedulerSnapshot {
 	s.Accounts = append([]AccountView(nil), s.Accounts...)
 	s.ActiveHighestTier = cloneStringSet(s.ActiveHighestTier)
+	s.SubscriptionRanks = cloneStringIntMap(s.SubscriptionRanks)
 	return s
+}
+
+func cloneStringIntMap(in map[string]int) map[string]int {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 func cloneStringSet(in map[string]struct{}) map[string]struct{} {
 	out := make(map[string]struct{}, len(in))
@@ -83,7 +97,8 @@ func schedulerPickPublished(req pluginapi.SchedulerPickRequest, now time.Time) P
 		}
 	}
 	if result.AuthID != "" {
-		return observeSchedulerDecision(snapshot, req, PickDecision{AuthID: result.AuthID, Handled: true, Reason: "selected"}, now)
+		known, value := strategySortValue(result.Ordered[0], SelectionPolicy{Strategy: snapshot.SelectionStrategy, MonthlyMode: snapshot.MonthlyMode, SubscriptionRanks: snapshot.SubscriptionRanks, Now: now})
+		return observeSchedulerDecision(snapshot, req, PickDecision{AuthID: result.AuthID, Handled: true, Reason: "selected", Strategy: snapshot.SelectionStrategy, StrategyKnown: known, StrategyValue: value}, now)
 	}
 	if snapshot.Fallback == FallbackFillFirst {
 		return observeSchedulerDecision(snapshot, req, PickDecision{Handled: true, DelegateBuiltin: pluginapi.SchedulerBuiltinFillFirst, Reason: result.Reason}, now)
@@ -110,7 +125,7 @@ func schedulerSnapshotFromState(state StateSnapshot, trials *TrialRegistry) *Sch
 		activity = pump.enqueue
 		observation = pump.enqueueObservation
 	}
-	return &SchedulerSnapshot{HandleEnabled: state.Config.HandleEnabled, Fallback: state.Config.Fallback, MonthlyMode: state.Config.MonthlyMode, Accounts: accounts, ActiveHighestTier: active, Trials: trials, EvidenceIntents: globalEvidenceIntents, Activity: activity, Observation: observation}
+	return &SchedulerSnapshot{HandleEnabled: state.Config.HandleEnabled, Fallback: state.Config.Fallback, MonthlyMode: state.Config.MonthlyMode, SelectionStrategy: state.Config.SelectionStrategy, SubscriptionRanks: subscriptionRanks(state.Config.SubscriptionOrder), Accounts: accounts, ActiveHighestTier: active, Trials: trials, EvidenceIntents: globalEvidenceIntents, Activity: activity, Observation: observation}
 }
 
 func accountViewFromState(a AccountState, cfg Config, now time.Time, trials *TrialRegistry) AccountView {
@@ -128,6 +143,10 @@ func accountViewFromState(a AccountState, cfg Config, now time.Time, trials *Tri
 		trial = trials.State(a.Instance, now)
 	}
 	circuit := effectiveCircuitState(a.Circuit, now).EffectiveState
+	quotaScore := a.BottleneckQuota
+	if !quotaScore.Known {
+		quotaScore = bottleneckQuotaScore(a.Quota)
+	}
 	circuitClass := CircuitClosed
 	if circuit == CircuitStateOpen {
 		circuitClass = CircuitOpen
@@ -141,6 +160,8 @@ func accountViewFromState(a AccountState, cfg Config, now time.Time, trials *Tri
 		ResetAt: reset, AuthBlocked: a.Refresh.AuthFailure, Circuit: circuitClass,
 		TemporaryUnavailable: a.TemporaryExhausted && a.TemporaryResetAt.After(now),
 		Trial:                trial, Expiry: accountSortTime(a), RemainingQuota: remainingQuota(a),
+		PlanType: normalizePlanType(a.PlanType), SubscriptionExpiresAt: a.SubscriptionExpiresAt,
+		QuotaScore: quotaScore,
 	}
 }
 

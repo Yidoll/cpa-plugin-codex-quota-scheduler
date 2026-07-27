@@ -21,7 +21,7 @@ func ParseCodexUsagePayload(raw []byte, now time.Time) (ParsedQuota, error) {
 
 	parsed := ParsedQuota{
 		Family:   AccountFamilyUnknown,
-		PlanType: getString(doc, "plan_type", "planType"),
+		PlanType: normalizePlanType(getString(doc, "plan_type", "planType")),
 	}
 	if credits, ok := getMap(doc, "rate_limit_reset_credits", "rateLimitResetCredits"); ok {
 		if count, ok := getInt(credits, "available_count", "availableCount"); ok {

@@ -27,6 +27,13 @@ type PersistentState struct {
 	ProbeAttemptSeq     uint64                                             `json:"probe_attempt_seq,omitempty"`
 	ProbeWindows        map[AuthInstanceID]map[ProbeWindowKind]ProbeWindow `json:"probe_windows,omitempty"`
 	LastConfirmedRoster *PersistedConfirmedRoster                          `json:"last_confirmed_roster,omitempty"`
+	SchedulingAccounts  map[string]AccountSchedulingState                  `json:"scheduling_accounts,omitempty"`
+}
+
+type AccountSchedulingState struct {
+	PlanType              string     `json:"plan_type,omitempty"`
+	SubscriptionExpiresAt time.Time  `json:"subscription_expires_at,omitempty"`
+	BottleneckQuota       QuotaScore `json:"bottleneck_quota"`
 }
 
 type PersistedRosterEntry struct {
@@ -43,7 +50,7 @@ type PersistedConfirmedRoster struct {
 }
 
 func NewPersistentState() PersistentState {
-	return PersistentState{SchemaVersion: CurrentStateSchema, AdmissionEpochs: map[AuthInstanceID]InstanceAdmissionEpoch{}, CredentialChains: map[AuthInstanceID]TransitionChain{}, Bindings: map[string]RuntimeBinding{}, ProbeAttempts: map[AuthInstanceID]ProbeAttemptSeam{}, ProbeWindows: map[AuthInstanceID]map[ProbeWindowKind]ProbeWindow{}}
+	return PersistentState{SchemaVersion: CurrentStateSchema, AdmissionEpochs: map[AuthInstanceID]InstanceAdmissionEpoch{}, CredentialChains: map[AuthInstanceID]TransitionChain{}, Bindings: map[string]RuntimeBinding{}, ProbeAttempts: map[AuthInstanceID]ProbeAttemptSeam{}, ProbeWindows: map[AuthInstanceID]map[ProbeWindowKind]ProbeWindow{}, SchedulingAccounts: map[string]AccountSchedulingState{}}
 }
 func clonePersistentState(s PersistentState) PersistentState {
 	raw, _ := json.Marshal(s)
@@ -64,6 +71,9 @@ func clonePersistentState(s PersistentState) PersistentState {
 	}
 	if out.ProbeWindows == nil {
 		out.ProbeWindows = map[AuthInstanceID]map[ProbeWindowKind]ProbeWindow{}
+	}
+	if out.SchedulingAccounts == nil {
+		out.SchedulingAccounts = map[string]AccountSchedulingState{}
 	}
 	return out
 }
@@ -191,6 +201,9 @@ func (s *StateStore) loadLocked() (PersistentState, RecoveryReport, error) {
 	}
 	if state.ProbeWindows == nil {
 		state.ProbeWindows = map[AuthInstanceID]map[ProbeWindowKind]ProbeWindow{}
+	}
+	if state.SchedulingAccounts == nil {
+		state.SchedulingAccounts = map[string]AccountSchedulingState{}
 	}
 	s.state = state
 	s.loaded = true

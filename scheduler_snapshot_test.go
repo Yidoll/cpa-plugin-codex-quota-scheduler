@@ -310,3 +310,40 @@ func TestSchedulerPickObservesOneImmutablePublication(t *testing.T) {
 	}
 	<-done
 }
+
+func TestStrategyPickReadsPublishedSnapshotWithoutHostCallbacks(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	host := &countingProductionHost{}
+	refresherMu.Lock()
+	previousRefresher := globalRefresher
+	globalRefresher = &QuotaRefresher{host: host}
+	refresherMu.Unlock()
+	t.Cleanup(func() {
+		refresherMu.Lock()
+		globalRefresher = previousRefresher
+		refresherMu.Unlock()
+	})
+
+	snapshot := &SchedulerSnapshot{
+		HandleEnabled:     true,
+		SelectionStrategy: SelectionStrategySubscriptionHigh,
+		SubscriptionRanks: map[string]int{"free": 0, "plus": 1},
+		Accounts: []AccountView{
+			{ID: "free", Instance: 1, Cache: CacheFresh, PlanType: "free"},
+			{ID: "plus", Instance: 2, Cache: CacheFresh, PlanType: "plus"},
+		},
+		ActiveHighestTier: map[string]struct{}{"free": {}, "plus": {}},
+	}
+	PublishSchedulerSnapshot(snapshot)
+	snapshot.SubscriptionRanks["free"] = 99
+	snapshot.Accounts[1].PlanType = "unknown"
+
+	req := pluginapi.SchedulerPickRequest{Provider: "codex", Candidates: []pluginapi.SchedulerAuthCandidate{{ID: "free", Provider: "codex"}, {ID: "plus", Provider: "codex"}}}
+	decision := schedulerPickPublished(req, now)
+	if decision.AuthID != "plus" {
+		t.Fatalf("decision = %#v, want immutable published plus selection", decision)
+	}
+	if calls := host.total(); calls != 0 {
+		t.Fatalf("strategy pick made %d Auth/HTTP host callbacks", calls)
+	}
+}
