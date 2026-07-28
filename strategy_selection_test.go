@@ -92,8 +92,8 @@ func TestProductionAndManagementQueueShareStrategyOrder(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.SelectionStrategy = SelectionStrategyQuotaLow
 	accounts := []AccountState{
-		{AuthID: "more", Instance: 1, Family: AccountFamilyWeekly, LastSuccessAt: now, Quota: ParsedQuota{LongWindow: &QuotaWindow{UsedPercent: &usedLow, ResetAt: now.Add(time.Hour)}}},
-		{AuthID: "less", Instance: 2, Family: AccountFamilyWeekly, LastSuccessAt: now, Quota: ParsedQuota{LongWindow: &QuotaWindow{UsedPercent: &usedHigh, ResetAt: now.Add(time.Hour)}}},
+		{AuthID: "more", Instance: 1, Family: AccountFamilyWeekly, PlanType: "plus", LastSuccessAt: now, Quota: ParsedQuota{LongWindow: &QuotaWindow{UsedPercent: &usedLow, ResetAt: now.Add(time.Hour)}}},
+		{AuthID: "less", Instance: 2, Family: AccountFamilyWeekly, PlanType: "plus", LastSuccessAt: now, Quota: ParsedQuota{LongWindow: &QuotaWindow{UsedPercent: &usedHigh, ResetAt: now.Add(time.Hour)}}},
 	}
 	state := StateSnapshot{Config: cfg, Accounts: accounts, CPAAdmission: CPAAdmissionState{Observed: true, AuthIDs: map[string]struct{}{"more": {}, "less": {}}}, Now: now}
 	req := requestWithCandidates("more", "less")

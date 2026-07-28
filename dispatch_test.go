@@ -266,8 +266,8 @@ func TestLogSchedulerDecisionIncludesDetailedFallbackReason(t *testing.T) {
 	if fields["reason"] != "fallback_fill_first" || fields["fallback"] != pluginapi.SchedulerBuiltinFillFirst {
 		t.Fatalf("fields = %#v, want fallback reason and builtin", fields)
 	}
-	if fields["ordered_count"] != 2 {
-		t.Fatalf("ordered_count = %#v, want 2; fields=%#v", fields["ordered_count"], fields)
+	if fields["ordered_count"] != 0 {
+		t.Fatalf("ordered_count = %#v, want 0 selectable accounts; fields=%#v", fields["ordered_count"], fields)
 	}
 	if fields["unavailable_summary"] == "" {
 		t.Fatalf("unavailable_summary empty; fields=%#v", fields)
@@ -277,13 +277,33 @@ func TestLogSchedulerDecisionIncludesDetailedFallbackReason(t *testing.T) {
 	}
 }
 
+func TestLogSchedulerDecisionKeepsZeroOrderedCountForUnavailableLegacyQueue(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	store := NewPluginState(DefaultConfig())
+	decision := PickDecision{
+		Handled:         true,
+		DelegateBuiltin: pluginapi.SchedulerBuiltinFillFirst,
+		Reason:          "fallback_fill_first",
+		OrderedCount:    0,
+		Ordered: []ScheduledAccount{
+			{AuthID: "blocked-a", UnavailableReason: "quota_exhausted"},
+			{AuthID: "blocked-b", UnavailableReason: "auth_failure"},
+		},
+	}
+	logSchedulerDecision(store, pluginapi.SchedulerPickRequest{Provider: "codex"}, decision, now)
+	if got := store.Snapshot(now).Logs[0].Fields["ordered_count"]; got != 0 {
+		t.Fatalf("ordered_count = %#v, want 0 available accounts", got)
+	}
+}
+
 func TestLogSchedulerDecisionIncludesSelectedAccountContext(t *testing.T) {
 	now := time.Date(2026, 6, 25, 10, 0, 0, 0, time.UTC)
 	store := NewPluginState(DefaultConfig())
 	decision := PickDecision{
-		AuthID:  "auth-1",
-		Handled: true,
-		Reason:  "selected",
+		AuthID:       "auth-1",
+		Handled:      true,
+		Reason:       "selected",
+		OrderedCount: 1,
 		Ordered: []ScheduledAccount{
 			{AuthID: "auth-1", CPAPriority: 8, SchedulerPriority: 3, QueueStatus: QueueStatusAvailable, Available: true},
 		},

@@ -494,6 +494,7 @@ func TestStatusJSONIncludesSchedulerSummary(t *testing.T) {
 	store := NewPluginState(cfg)
 	account := weeklyAccount("auth-1", 5, now.Add(24*time.Hour), false)
 	account.LastSuccessAt = now
+	account.PlanType = "plus"
 	store.UpsertQuota(account)
 	store.RecordSelection("auth-1", "selected")
 
@@ -541,10 +542,12 @@ func TestStatusNextAuthIDScansLowerPluginPriority(t *testing.T) {
 	now := time.Date(2026, 6, 21, 9, 0, 0, 0, time.UTC)
 	store := NewPluginState(DefaultConfig())
 	highBlocked := weeklyAccount("high-blocked", 5, now.Add(24*time.Hour), false)
+	highBlocked.PlanType = "plus"
 	highBlocked.Stale = true
 	highBlocked.Annotation.SchedulerPriority = 1
 	lowAvailable := weeklyAccount("low-available", 5, now.Add(time.Hour), false)
 	lowAvailable.LastSuccessAt = now
+	lowAvailable.PlanType = "plus"
 	store.UpsertQuota(highBlocked)
 	store.UpsertQuota(lowAvailable)
 
@@ -572,7 +575,9 @@ func TestManagementStatusExcludesActiveTrialConsistently(t *testing.T) {
 	now := time.Date(2026, 7, 15, 9, 0, 0, 0, time.UTC)
 	trialAccount := weeklyAccount("trial", 0, now.Add(time.Hour), false)
 	trialAccount.Instance = 101
+	trialAccount.PlanType = "plus"
 	selectable := weeklyAccount("selectable", 0, now.Add(3*time.Hour), false)
+	selectable.PlanType = "plus"
 	selectable.Instance = 102
 	used := 100.0
 	knownRecovery := weeklyAccount("known-recovery", 0, now.Add(2*time.Hour), false)

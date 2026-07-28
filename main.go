@@ -53,7 +53,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -62,8 +62,10 @@ import (
 )
 
 var (
-	hostAPI          atomic.Pointer[C.cliproxy_host_api]
-	hostRosterLatest atomic.Pointer[HostRosterSnapshot]
+	hostAPI                   atomic.Pointer[C.cliproxy_host_api]
+	hostRosterLatest          atomic.Pointer[HostRosterSnapshot]
+	hostRosterFilterPublished atomic.Pointer[RosterFilterSummary]
+	hostRosterFilterMu        sync.Mutex
 )
 
 const hostRosterDetectionTimeout = 5 * time.Second
@@ -73,7 +75,18 @@ func main() {}
 // ABIHostAuthLister normalizes raw host.auth.list JSON before the typed ABI
 // can erase whether Priority was absent or explicitly zero.
 type ABIHostAuthLister struct {
-	call func(string, any) (json.RawMessage, error)
+	call    func(string, any) (json.RawMessage, error)
+	observe func(RosterFilterSummary)
+}
+
+type RosterFilterSummary struct {
+	Received             int `json:"received"`
+	Eligible             int `json:"eligible"`
+	ExcludedNonCodex     int `json:"excluded_non_codex"`
+	ExcludedDisabled     int `json:"excluded_disabled"`
+	ExcludedUnavailable  int `json:"excluded_unavailable"`
+	ExcludedMissingID    int `json:"excluded_missing_id"`
+	ExcludedMissingIndex int `json:"excluded_missing_auth_index"`
 }
 
 func (l ABIHostAuthLister) ListHostAuths(ctx context.Context) ([]RosterEntry, error) {
@@ -90,18 +103,36 @@ func (l ABIHostAuthLister) ListHostAuths(ctx context.Context) ([]RosterEntry, er
 	}
 	var response struct {
 		Files []struct {
-			ID        string `json:"id"`
-			AuthIndex string `json:"auth_index"`
-			Provider  string `json:"provider"`
-			Priority  *int   `json:"priority"`
+			ID          string `json:"id"`
+			AuthIndex   string `json:"auth_index"`
+			Provider    string `json:"provider"`
+			Priority    *int   `json:"priority"`
+			Disabled    bool   `json:"disabled"`
+			Unavailable bool   `json:"unavailable"`
 		} `json:"files"`
 	}
 	if err := json.Unmarshal(result, &response); err != nil {
 		return nil, fmt.Errorf("decode host.auth.list result: %w", err)
 	}
+	summary := RosterFilterSummary{Received: len(response.Files)}
 	entries := make([]RosterEntry, 0, len(response.Files))
 	for _, file := range response.Files {
-		if !strings.EqualFold(strings.TrimSpace(file.Provider), "codex") {
+		id, authIndex, reason := normalizeEligibleCodexAuth(file.ID, file.AuthIndex, file.Provider, file.Disabled, file.Unavailable)
+		switch reason {
+		case HostAuthExcludedNonCodex:
+			summary.ExcludedNonCodex++
+			continue
+		case HostAuthExcludedDisabled:
+			summary.ExcludedDisabled++
+			continue
+		case HostAuthExcludedUnavailable:
+			summary.ExcludedUnavailable++
+			continue
+		case HostAuthExcludedMissingID:
+			summary.ExcludedMissingID++
+			continue
+		case HostAuthExcludedMissingIndex:
+			summary.ExcludedMissingIndex++
 			continue
 		}
 		priority := file.Priority
@@ -110,13 +141,37 @@ func (l ABIHostAuthLister) ListHostAuths(ctx context.Context) ([]RosterEntry, er
 			priority = &defaultPriority
 		}
 		entries = append(entries, RosterEntry{
-			ID:        file.ID,
-			AuthIndex: file.AuthIndex,
+			ID:        id,
+			AuthIndex: authIndex,
 			Provider:  "codex",
 			Priority:  priority,
 		})
+		summary.Eligible++
+	}
+	if l.observe != nil {
+		l.observe(summary)
 	}
 	return entries, nil
+}
+
+func publishRosterFilterSummary(summary RosterFilterSummary) {
+	hostRosterFilterMu.Lock()
+	defer hostRosterFilterMu.Unlock()
+	previous := hostRosterFilterPublished.Load()
+	if previous != nil && *previous == summary {
+		return
+	}
+	copySummary := summary
+	hostRosterFilterPublished.Store(&copySummary)
+	globalState.RecordLog("info", "roster.filtered", "权威 roster 输入已按宿主资格过滤", map[string]any{
+		"received_count":                    summary.Received,
+		"eligible_count":                    summary.Eligible,
+		"excluded_non_codex_count":          summary.ExcludedNonCodex,
+		"excluded_disabled_count":           summary.ExcludedDisabled,
+		"excluded_unavailable_count":        summary.ExcludedUnavailable,
+		"excluded_missing_id_count":         summary.ExcludedMissingID,
+		"excluded_missing_auth_index_count": summary.ExcludedMissingIndex,
+	}, time.Now())
 }
 
 //export cliproxy_plugin_init
@@ -142,7 +197,7 @@ func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_a
 		globalRefresher = nil
 	}
 	globalRosterController = NewRosterController(RosterControllerOptions{
-		Host: ABIHostAuthLister{},
+		Host: ABIHostAuthLister{observe: publishRosterFilterSummary},
 		Provisional: func() *ActiveRoster {
 			if production == nil {
 				return nil

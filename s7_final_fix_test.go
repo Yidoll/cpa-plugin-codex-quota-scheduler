@@ -84,7 +84,7 @@ func TestAutonomousDegradedExpiryAtRequestBoundaries(t *testing.T) {
 	httpHost := &countingProductionHost{httpResp: pluginapi.HTTPResponse{StatusCode: http.StatusOK}}
 	state := NewPluginState(DefaultConfig())
 	state.ReplaceCPAAdmission(CPAAdmissionState{Observed: true, Priority: priority, AuthIDs: map[string]struct{}{"a": {}}})
-	state.UpsertQuota(AccountState{AuthID: "a", AuthIndex: "idx-a", Instance: legacyAuthInstanceID("a"), Provider: "codex", Priority: priority, LastSuccessAt: base})
+	state.UpsertQuota(AccountState{AuthID: "a", AuthIndex: "idx-a", Instance: legacyAuthInstanceID("a"), Provider: "codex", Priority: priority, PlanType: "plus", LastSuccessAt: base})
 	adapter := &rosterCredentialHost{host: httpHost, roster: HostRosterSnapshot{Capability: CapabilityB}}
 	r, err := NewProductionQuotaRefresher(httpHost, state, adapter, HostRosterSnapshot{Capability: CapabilityB}, filepath.Join(t.TempDir(), "state.json"), clock.Now)
 	if err != nil {
@@ -177,7 +177,7 @@ func TestProductionSchedulerPickActivityIsAsyncBoundedAndWakesDormantRefresh(t *
 	rosterHost := &s7RosterHost{entries: []RosterEntry{entry}}
 	state := NewPluginState(DefaultConfig())
 	state.ReplaceCPAAdmission(CPAAdmissionState{Observed: true, Priority: priority, AuthIDs: map[string]struct{}{"a": {}}})
-	state.UpsertQuota(AccountState{AuthID: "a", AuthIndex: "idx-a", Instance: legacyAuthInstanceID("a"), Provider: "codex", Priority: priority, LastSuccessAt: base})
+	state.UpsertQuota(AccountState{AuthID: "a", AuthIndex: "idx-a", Instance: legacyAuthInstanceID("a"), Provider: "codex", Priority: priority, PlanType: "plus", LastSuccessAt: base})
 	httpHost := &countingProductionHost{}
 	r := NewQuotaRefresher(httpHost, state, clock.Now)
 	c := NewRosterController(RosterControllerOptions{Host: rosterHost, Now: clock.Now, Observe: r.ObserveRosterLifecycle})

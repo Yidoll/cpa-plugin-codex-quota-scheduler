@@ -445,8 +445,8 @@ func TestWaitingRosterRecoveryUsesPreviouslyLoadedStrategy(t *testing.T) {
 	cfg.SelectionStrategy = SelectionStrategyQuotaLow
 	lowUsed, highUsed := 10.0, 80.0
 	store := NewPluginState(cfg)
-	store.UpsertQuota(AccountState{AuthID: "more", Instance: 1, Family: AccountFamilyWeekly, LastSuccessAt: now, Quota: ParsedQuota{LongWindow: &QuotaWindow{UsedPercent: &lowUsed, ResetAt: now.Add(time.Hour)}}})
-	store.UpsertQuota(AccountState{AuthID: "less", Instance: 2, Family: AccountFamilyWeekly, LastSuccessAt: now, Quota: ParsedQuota{LongWindow: &QuotaWindow{UsedPercent: &highUsed, ResetAt: now.Add(time.Hour)}}})
+	store.UpsertQuota(AccountState{AuthID: "more", Instance: 1, Family: AccountFamilyWeekly, PlanType: "plus", LastSuccessAt: now, Quota: ParsedQuota{LongWindow: &QuotaWindow{UsedPercent: &lowUsed, ResetAt: now.Add(time.Hour)}}})
+	store.UpsertQuota(AccountState{AuthID: "less", Instance: 2, Family: AccountFamilyWeekly, PlanType: "plus", LastSuccessAt: now, Quota: ParsedQuota{LongWindow: &QuotaWindow{UsedPercent: &highUsed, ResetAt: now.Add(time.Hour)}}})
 	previousSnapshot := publishedSchedulerSnapshot.Load()
 	t.Cleanup(func() { publishedSchedulerSnapshot.Store(previousSnapshot) })
 	publishSchedulerState(store, nil, now)

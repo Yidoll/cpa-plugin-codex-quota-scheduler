@@ -12,19 +12,20 @@ import (
 )
 
 type SchedulerSnapshot struct {
-	HandleEnabled     bool
-	Fallback          FallbackMode
-	MonthlyMode       MonthlyMode
-	SelectionStrategy SelectionStrategy
-	SubscriptionRanks map[string]int
-	Accounts          []AccountView
-	ActiveHighestTier map[string]struct{}
-	AdmissionObserved bool
-	Trials            *TrialRegistry
-	EvidenceIntents   chan<- EvidenceIntent
-	AdmissionVersion  uint64
-	Activity          func(pluginapi.SchedulerPickRequest, uint64, time.Time)
-	Observation       func(pluginapi.SchedulerPickRequest, PickDecision, time.Time)
+	HandleEnabled       bool
+	ExcludeFreeAccounts bool
+	Fallback            FallbackMode
+	MonthlyMode         MonthlyMode
+	SelectionStrategy   SelectionStrategy
+	SubscriptionRanks   map[string]int
+	Accounts            []AccountView
+	ActiveHighestTier   map[string]struct{}
+	AdmissionObserved   bool
+	Trials              *TrialRegistry
+	EvidenceIntents     chan<- EvidenceIntent
+	AdmissionVersion    uint64
+	Activity            func(pluginapi.SchedulerPickRequest, uint64, time.Time)
+	Observation         func(pluginapi.SchedulerPickRequest, PickDecision, time.Time)
 }
 
 type EvidenceIntent struct {
@@ -120,6 +121,8 @@ func selectionPickDecision(snapshot *SchedulerSnapshot, result SelectionResult, 
 	decision.CandidateCount = result.CandidateCount
 	decision.AdmittedCount = result.AdmittedCount
 	decision.OrderedCount = len(result.Ordered)
+	decision.ActiveSelectionCount = result.ActiveSelectionCount
+	decision.PlanFilterContext = result.PlanFilterContext
 	if decision.AuthID == "" {
 		decision.UnavailableSummary = selectionUnavailableSummary(result)
 	}
@@ -165,7 +168,7 @@ func schedulerSnapshotFromState(state StateSnapshot, trials *TrialRegistry) *Sch
 		activity = pump.enqueue
 		observation = pump.enqueueObservation
 	}
-	return &SchedulerSnapshot{HandleEnabled: state.Config.HandleEnabled, Fallback: state.Config.Fallback, MonthlyMode: state.Config.MonthlyMode, SelectionStrategy: state.Config.SelectionStrategy, SubscriptionRanks: subscriptionRanks(state.Config.SubscriptionOrder), Accounts: accounts, ActiveHighestTier: active, AdmissionObserved: state.CPAAdmission.Observed, Trials: trials, EvidenceIntents: globalEvidenceIntents, Activity: activity, Observation: observation}
+	return &SchedulerSnapshot{HandleEnabled: state.Config.HandleEnabled, ExcludeFreeAccounts: state.Config.ExcludeFreeAccounts, Fallback: state.Config.Fallback, MonthlyMode: state.Config.MonthlyMode, SelectionStrategy: state.Config.SelectionStrategy, SubscriptionRanks: subscriptionRanks(state.Config.SubscriptionOrder), Accounts: accounts, ActiveHighestTier: active, AdmissionObserved: state.CPAAdmission.Observed, Trials: trials, EvidenceIntents: globalEvidenceIntents, Activity: activity, Observation: observation}
 }
 
 func accountViewFromState(a AccountState, cfg Config, now time.Time, trials *TrialRegistry) AccountView {

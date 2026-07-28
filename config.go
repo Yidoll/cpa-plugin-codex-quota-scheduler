@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -27,7 +28,7 @@ const (
 	FallbackFillFirst FallbackMode = "fill-first"
 )
 
-var pluginVersion = "0.3.1"
+var pluginVersion = "0.4.0"
 
 type MonthlyMode string
 
@@ -37,6 +38,7 @@ type FallbackMode string
 
 type Config struct {
 	HandleEnabled        bool
+	ExcludeFreeAccounts  bool `json:"exclude_free_accounts"`
 	QuotaRefreshInterval time.Duration
 	// StaleAfter classifies cache age and permits pick-time recovery. It does
 	// not own a normal-refresh deadline.
@@ -75,6 +77,7 @@ type registrationCapabilities struct {
 
 type rawConfig struct {
 	HandleEnabled                   *bool    `yaml:"handle_enabled"`
+	ExcludeFreeAccounts             *bool    `yaml:"exclude_free_accounts"`
 	QuotaRefreshInterval            string   `yaml:"quota_refresh_interval"`
 	StaleAfter                      string   `yaml:"stale_after"`
 	MonthlyMode                     string   `yaml:"monthly_mode"`
@@ -98,15 +101,18 @@ type rawConfig struct {
 }
 
 type strategyConfigOverlay struct {
-	SelectionStrategyPresent bool
-	SelectionStrategy        SelectionStrategy
-	SubscriptionOrderPresent bool
-	SubscriptionOrder        []string
+	ExcludeFreeAccountsPresent bool
+	ExcludeFreeAccounts        bool
+	SelectionStrategyPresent   bool
+	SelectionStrategy          SelectionStrategy
+	SubscriptionOrderPresent   bool
+	SubscriptionOrder          []string
 }
 
 func DefaultConfig() Config {
 	return Config{
 		HandleEnabled:                   true,
+		ExcludeFreeAccounts:             true,
 		QuotaRefreshInterval:            30 * time.Minute,
 		StaleAfter:                      5 * time.Hour,
 		MonthlyMode:                     MonthlyModeExpiryOrder,
@@ -125,6 +131,16 @@ func DefaultConfig() Config {
 		MaxLogEntries:                   200,
 		LogRetention:                    24 * time.Hour,
 	}
+}
+
+func (cfg *Config) UnmarshalJSON(raw []byte) error {
+	type configJSON Config
+	decoded := configJSON{ExcludeFreeAccounts: true}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return err
+	}
+	*cfg = Config(decoded)
+	return nil
 }
 
 func NormalizeConfig(cfg Config) Config {
@@ -225,6 +241,9 @@ func decodeConfig(raw []byte, validateStrategy bool) (Config, error) {
 	}
 	if decoded.HandleEnabled != nil {
 		cfg.HandleEnabled = *decoded.HandleEnabled
+	}
+	if decoded.ExcludeFreeAccounts != nil {
+		cfg.ExcludeFreeAccounts = *decoded.ExcludeFreeAccounts
 	}
 	if decoded.QuotaRefreshInterval != "" {
 		d, err := time.ParseDuration(decoded.QuotaRefreshInterval)
@@ -376,6 +395,14 @@ func decodeStrategyConfigOverlay(raw []byte) (strategyConfigOverlay, error) {
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		key, value := root.Content[i], root.Content[i+1]
 		switch key.Value {
+		case "exclude_free_accounts":
+			overlay.ExcludeFreeAccountsPresent = true
+			if value.Tag == "!!null" {
+				return strategyConfigOverlay{}, fmt.Errorf("exclude_free_accounts must be a boolean")
+			}
+			if err := value.Decode(&overlay.ExcludeFreeAccounts); err != nil {
+				return strategyConfigOverlay{}, fmt.Errorf("exclude_free_accounts: %w", err)
+			}
 		case "selection_strategy":
 			overlay.SelectionStrategyPresent = true
 			if value.Tag == "!!null" {
@@ -405,6 +432,9 @@ func decodeStrategyConfigOverlay(raw []byte) (strategyConfigOverlay, error) {
 
 func applyStrategyConfigOverlay(base Config, overlay strategyConfigOverlay) (Config, error) {
 	cfg := cloneConfig(base)
+	if overlay.ExcludeFreeAccountsPresent {
+		cfg.ExcludeFreeAccounts = overlay.ExcludeFreeAccounts
+	}
 	if overlay.SelectionStrategyPresent {
 		cfg.SelectionStrategy = overlay.SelectionStrategy
 	}

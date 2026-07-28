@@ -153,20 +153,20 @@ func logSchedulerDecision(store *PluginState, req pluginapi.SchedulerPickRequest
 	level := "info"
 	event := "scheduler.unhandled"
 	message := "请求未由插件接管"
-	orderedCount := decision.OrderedCount
-	if orderedCount == 0 && len(decision.Ordered) > 0 {
-		orderedCount = len(decision.Ordered)
-	}
 	fields := map[string]any{
-		"model":              req.Model,
-		"provider":           req.Provider,
-		"reason":             decision.Reason,
-		"candidate_count":    decision.CandidateCount,
-		"admitted_count":     decision.AdmittedCount,
-		"ordered_count":      orderedCount,
-		"selection_strategy": displaySelectionStrategy(decision.Strategy),
-		"strategy_known":     decision.StrategyKnown,
-		"strategy_value":     displayStrategyValue(decision.StrategyValue),
+		"model":                  req.Model,
+		"provider":               req.Provider,
+		"reason":                 decision.Reason,
+		"candidate_count":        decision.CandidateCount,
+		"admitted_count":         decision.AdmittedCount,
+		"active_selection_count": decision.ActiveSelectionCount,
+		"ordered_count":          decision.OrderedCount,
+		"selection_strategy":     displaySelectionStrategy(decision.Strategy),
+		"strategy_known":         decision.StrategyKnown,
+		"strategy_value":         displayStrategyValue(decision.StrategyValue),
+	}
+	if decision.PlanFilterContext != "" {
+		fields["plan_filter_context"] = decision.PlanFilterContext
 	}
 	if decision.AuthID != "" {
 		event = "scheduler.selected"

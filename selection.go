@@ -75,17 +75,19 @@ func futureSubscriptionExpiry(expiresAt, now time.Time) (time.Time, bool) {
 type Candidate struct{ ID, Provider string }
 
 type SelectionResult struct {
-	AuthID         string
-	Instance       AuthInstanceID
-	Class          AvailabilityClass
-	Trial          bool
-	Fallback       bool
-	EvidenceSource string
-	Reason         string
-	Ordered        []AccountView
-	CandidateCount int
-	AdmittedCount  int
-	Unavailable    []SelectionUnavailable
+	AuthID               string
+	Instance             AuthInstanceID
+	Class                AvailabilityClass
+	Trial                bool
+	Fallback             bool
+	EvidenceSource       string
+	Reason               string
+	Ordered              []AccountView
+	CandidateCount       int
+	AdmittedCount        int
+	ActiveSelectionCount int
+	PlanFilterContext    string
+	Unavailable          []SelectionUnavailable
 }
 
 type SelectionUnavailable struct {
@@ -146,6 +148,9 @@ func selectAccountSkipping(snapshot SchedulerSnapshot, candidates []Candidate, n
 		result.Fallback = snapshot.Fallback == FallbackFillFirst
 		return result
 	}
+	planEligible, planFilterContext, activeSelectionCount := planEligibility(snapshot, eligible)
+	result.PlanFilterContext = planFilterContext
+	result.ActiveSelectionCount = activeSelectionCount
 	byClass := map[AvailabilityClass][]AccountView{Preferred: {}, Opportunistic: {}}
 	seen := make(map[string]struct{}, len(eligible))
 	for _, a := range snapshot.Accounts {
@@ -153,6 +158,10 @@ func selectAccountSkipping(snapshot SchedulerSnapshot, candidates []Candidate, n
 			continue
 		}
 		seen[a.ID] = struct{}{}
+		if reason, excluded := planEligibilityReason(snapshot, planEligible, a); excluded {
+			result.Unavailable = append(result.Unavailable, SelectionUnavailable{AuthID: a.ID, Reason: reason})
+			continue
+		}
 		if _, blocked := skip[a.Instance]; blocked {
 			result.Unavailable = append(result.Unavailable, SelectionUnavailable{AuthID: a.ID, Reason: "quota_probe_wait"})
 			continue
@@ -191,6 +200,62 @@ func selectAccountSkipping(snapshot SchedulerSnapshot, candidates []Candidate, n
 	result.Reason = "no_selectable_account"
 	result.Fallback = snapshot.Fallback == FallbackFillFirst
 	return result
+}
+
+func planEligibility(snapshot SchedulerSnapshot, eligible map[string]struct{}) (map[string]struct{}, string, int) {
+	if !snapshot.ExcludeFreeAccounts {
+		return nil, "", len(eligible)
+	}
+	accounts := make(map[string]AccountView, len(eligible))
+	for _, account := range snapshot.Accounts {
+		if _, ok := eligible[account.ID]; ok {
+			accounts[account.ID] = account
+		}
+	}
+	hasKnownNonFree := false
+	allKnownFree := len(eligible) > 0
+	for authID := range eligible {
+		account, ok := accounts[authID]
+		if !ok {
+			allKnownFree = false
+			continue
+		}
+		plan := normalizePlanType(account.PlanType)
+		switch {
+		case plan == "":
+			allKnownFree = false
+		case plan == "free":
+		default:
+			hasKnownNonFree = true
+			allKnownFree = false
+		}
+	}
+	if allKnownFree {
+		return nil, "all_free_relaxed", len(eligible)
+	}
+	allowed := make(map[string]struct{}, len(eligible))
+	if hasKnownNonFree {
+		for authID, account := range accounts {
+			plan := normalizePlanType(account.PlanType)
+			if plan != "" && plan != "free" {
+				allowed[authID] = struct{}{}
+			}
+		}
+	}
+	return allowed, "", len(allowed)
+}
+
+func planEligibilityReason(snapshot SchedulerSnapshot, allowed map[string]struct{}, account AccountView) (string, bool) {
+	if !snapshot.ExcludeFreeAccounts || allowed == nil {
+		return "", false
+	}
+	if _, ok := allowed[account.ID]; ok {
+		return "", false
+	}
+	if normalizePlanType(account.PlanType) == "free" {
+		return "free_account", true
+	}
+	return "unknown_plan", true
 }
 
 func selectionUnavailableReason(account AccountView, now time.Time) string {

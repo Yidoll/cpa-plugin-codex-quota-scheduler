@@ -3,15 +3,48 @@ package main
 import (
 	"context"
 	"sort"
+	"strings"
 	"time"
 )
 
 type HostCapability uint8
 
+type HostAuthEligibilityReason uint8
+
 const (
 	CapabilityB HostCapability = iota
 	CapabilityA
 )
+
+const (
+	HostAuthEligible HostAuthEligibilityReason = iota
+	HostAuthExcludedNonCodex
+	HostAuthExcludedDisabled
+	HostAuthExcludedUnavailable
+	HostAuthExcludedMissingID
+	HostAuthExcludedMissingIndex
+)
+
+func normalizeEligibleCodexAuth(id, authIndex, provider string, disabled, unavailable bool) (string, string, HostAuthEligibilityReason) {
+	if !strings.EqualFold(strings.TrimSpace(provider), "codex") {
+		return "", "", HostAuthExcludedNonCodex
+	}
+	if disabled {
+		return "", "", HostAuthExcludedDisabled
+	}
+	if unavailable {
+		return "", "", HostAuthExcludedUnavailable
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", "", HostAuthExcludedMissingID
+	}
+	authIndex = strings.TrimSpace(authIndex)
+	if authIndex == "" {
+		return "", "", HostAuthExcludedMissingIndex
+	}
+	return id, authIndex, HostAuthEligible
+}
 
 // RosterEntry is the normalized host.auth.list boundary shape. Priority is a
 // pointer because the v7.2.42 typed ABI uses int and cannot distinguish a

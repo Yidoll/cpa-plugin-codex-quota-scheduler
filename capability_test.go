@@ -71,7 +71,7 @@ func TestSuiteCapabilityFallsBackForEmptyRoster(t *testing.T) {
 
 func TestSuiteCapabilityABINormalizationPreservesExplicitAndDefaultZero(t *testing.T) {
 	lister := ABIHostAuthLister{call: func(string, any) (json.RawMessage, error) {
-		return json.RawMessage(`{"files":[{"id":"explicit-zero","provider":"codex","priority":0},{"id":"missing","provider":"codex"}]}`), nil
+		return json.RawMessage(`{"files":[{"id":"explicit-zero","auth_index":"idx-explicit","provider":"codex","priority":0},{"id":"missing","auth_index":"idx-missing","provider":"codex"}]}`), nil
 	}}
 
 	entries, err := lister.ListHostAuths(context.Background())
@@ -103,7 +103,7 @@ func TestSuiteCapabilityABIMissingCodexPriorityDefaultsToZero(t *testing.T) {
 
 func TestSuiteCapabilityABIIgnoresNonCodexEntries(t *testing.T) {
 	lister := ABIHostAuthLister{call: func(string, any) (json.RawMessage, error) {
-		return json.RawMessage(`{"files":[{"id":"claude","provider":"claude"},{"id":"codex","provider":" CodEx ","priority":3}]}`), nil
+		return json.RawMessage(`{"files":[{"id":"claude","auth_index":"idx-claude","provider":"claude"},{"id":"codex","auth_index":"idx-codex","provider":" CodEx ","priority":3}]}`), nil
 	}}
 
 	entries, err := lister.ListHostAuths(context.Background())

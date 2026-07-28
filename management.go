@@ -30,6 +30,7 @@ type StatusPayload struct {
 	SelectionStrategy        SelectionStrategy      `json:"selection_strategy"`
 	SelectionStrategyDisplay string                 `json:"selection_strategy_display"`
 	HandleEnabled            bool                   `json:"handle_enabled"`
+	ExcludeFreeAccounts      bool                   `json:"exclude_free_accounts"`
 	LastSelected             string                 `json:"last_selected"`
 	LastReason               string                 `json:"last_reason"`
 	RefreshActive            bool                   `json:"refresh_active"`
@@ -85,7 +86,9 @@ type EmptyStatePayload struct {
 }
 
 type SettingsPayload struct {
-	HandleEnabled                   bool              `json:"handle_enabled"`
+	HandleEnabled                   bool `json:"handle_enabled"`
+	ExcludeFreeAccounts             bool `json:"exclude_free_accounts"`
+	excludeFreeAccountsPresent      bool
 	MonthlyMode                     MonthlyMode       `json:"monthly_mode"`
 	SelectionStrategy               SelectionStrategy `json:"selection_strategy"`
 	SubscriptionOrder               []string          `json:"subscription_order"`
@@ -105,6 +108,25 @@ type SettingsPayload struct {
 	CircuitHalfOpenSuccessThreshold int               `json:"circuit_half_open_success_threshold"`
 	MaxLogEntries                   int               `json:"max_log_entries"`
 	LogRetention                    string            `json:"log_retention"`
+}
+
+func (payload *SettingsPayload) UnmarshalJSON(raw []byte) error {
+	type settingsPayloadJSON SettingsPayload
+	var decoded settingsPayloadJSON
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
+	value, present := fields["exclude_free_accounts"]
+	if present && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		return jsonError("exclude_free_accounts must be a boolean")
+	}
+	decoded.excludeFreeAccountsPresent = present
+	*payload = SettingsPayload(decoded)
+	return nil
 }
 
 type StatusAccount struct {
@@ -145,6 +167,7 @@ type StatusAccount struct {
 	SubscriptionExpiresText      string             `json:"subscription_expires_text,omitempty"`
 	StrategyKnown                bool               `json:"strategy_known"`
 	StrategyValue                string             `json:"strategy_value"`
+	ActiveSelectionEligibility   string             `json:"active_selection_eligibility"`
 }
 
 type StatusResetProbe struct {
@@ -323,6 +346,8 @@ func resourceRouteAllowed(method, path string) bool {
 func SettingsFromConfig(cfg Config) SettingsPayload {
 	return SettingsPayload{
 		HandleEnabled:                   cfg.HandleEnabled,
+		ExcludeFreeAccounts:             cfg.ExcludeFreeAccounts,
+		excludeFreeAccountsPresent:      true,
 		MonthlyMode:                     cfg.MonthlyMode,
 		SelectionStrategy:               cfg.SelectionStrategy,
 		SubscriptionOrder:               cloneStringSlice(cfg.SubscriptionOrder),
@@ -370,6 +395,9 @@ func ConfigFromSettings(base Config, payload SettingsPayload) (Config, error) {
 		cfg.StaleAfter = d
 	}
 	cfg.HandleEnabled = payload.HandleEnabled
+	if payload.excludeFreeAccountsPresent {
+		cfg.ExcludeFreeAccounts = payload.ExcludeFreeAccounts
+	}
 	cfg.EnableUsageFeedback = payload.EnableUsageFeedback
 	cfg.EnableResetProbe = payload.EnableResetProbe
 	cfg.ProbeOnProvisionalRoster = payload.ProbeOnProvisionalRoster
@@ -576,6 +604,7 @@ func buildStatusPayload(snapshot StateSnapshot, ordered []ScheduledAccount, life
 		SelectionStrategy:        snapshot.Config.SelectionStrategy,
 		SelectionStrategyDisplay: displaySelectionStrategy(snapshot.Config.SelectionStrategy),
 		HandleEnabled:            snapshot.Config.HandleEnabled,
+		ExcludeFreeAccounts:      snapshot.Config.ExcludeFreeAccounts,
 		LastSelected:             snapshot.LastSelected,
 		LastReason:               snapshot.LastReason,
 		RefreshActive:            refreshActiveFromSnapshot(snapshot),
@@ -595,7 +624,7 @@ func buildStatusPayload(snapshot StateSnapshot, ordered []ScheduledAccount, life
 	} else {
 		payload.RefreshState = "sleeping"
 	}
-	payload.NextAuthID = nextStatusAuthID(ordered)
+	payload.NextAuthID = nextStatusAuthID(snapshot, ordered)
 	ranks := subscriptionRanks(snapshot.Config.SubscriptionOrder)
 	policy := SelectionPolicy{Strategy: snapshot.Config.SelectionStrategy, MonthlyMode: snapshot.Config.MonthlyMode, SubscriptionRanks: ranks, Now: snapshot.Now}
 	for id, group := range snapshot.Annotations.Groups {
@@ -621,30 +650,31 @@ func buildStatusPayload(snapshot StateSnapshot, ordered []ScheduledAccount, life
 
 		view := accountViewFromState(account, snapshot.Config, snapshot.Now, nil)
 		status := StatusAccount{
-			Rank:                    i + 1,
-			AuthID:                  scheduled.AuthID,
-			Alias:                   scheduled.Annotation.Alias,
-			Notes:                   scheduled.Annotation.Notes,
-			GroupID:                 groupID,
-			Group:                   groupName,
-			GroupNotes:              groupNotes,
-			Tags:                    cloneStringSlice(scheduled.Annotation.Tags),
-			CPAPriority:             scheduled.CPAPriority,
-			SchedulerPriority:       scheduled.SchedulerPriority,
-			Family:                  scheduled.Family,
-			QueueStatus:             scheduled.QueueStatus,
-			Available:               scheduled.Available,
-			UnavailableReason:       scheduled.UnavailableReason,
-			ResetExpiry:             scheduled.SortTime,
-			ResetExpiryText:         formatTime(scheduled.SortTime),
-			LastError:               account.LastError,
-			NextRetryText:           formatTime(account.Refresh.NextRetryAt),
-			AuthFailure:             account.Refresh.AuthFailure,
-			FiveHour:                statusWindow(account.Quota.FiveHour, "5 小时额度"),
-			LongWindow:              statusWindow(account.Quota.LongWindow, longWindowLabelCN(account.Family)),
-			BottleneckQuota:         view.QuotaScore,
-			PlanType:                normalizePlanType(account.PlanType),
-			SubscriptionExpiresText: formatTime(account.SubscriptionExpiresAt),
+			Rank:                       i + 1,
+			AuthID:                     scheduled.AuthID,
+			Alias:                      scheduled.Annotation.Alias,
+			Notes:                      scheduled.Annotation.Notes,
+			GroupID:                    groupID,
+			Group:                      groupName,
+			GroupNotes:                 groupNotes,
+			Tags:                       cloneStringSlice(scheduled.Annotation.Tags),
+			CPAPriority:                scheduled.CPAPriority,
+			SchedulerPriority:          scheduled.SchedulerPriority,
+			Family:                     scheduled.Family,
+			QueueStatus:                scheduled.QueueStatus,
+			Available:                  scheduled.Available,
+			UnavailableReason:          scheduled.UnavailableReason,
+			ResetExpiry:                scheduled.SortTime,
+			ResetExpiryText:            formatTime(scheduled.SortTime),
+			LastError:                  account.LastError,
+			NextRetryText:              formatTime(account.Refresh.NextRetryAt),
+			AuthFailure:                account.Refresh.AuthFailure,
+			FiveHour:                   statusWindow(account.Quota.FiveHour, "5 小时额度"),
+			LongWindow:                 statusWindow(account.Quota.LongWindow, longWindowLabelCN(account.Family)),
+			BottleneckQuota:            view.QuotaScore,
+			PlanType:                   normalizePlanType(account.PlanType),
+			SubscriptionExpiresText:    formatTime(account.SubscriptionExpiresAt),
+			ActiveSelectionEligibility: activeSelectionEligibility(snapshot.Config, account.PlanType),
 		}
 		if !account.SubscriptionExpiresAt.IsZero() {
 			expiresAt := account.SubscriptionExpiresAt
@@ -676,6 +706,20 @@ func buildStatusPayload(snapshot StateSnapshot, ordered []ScheduledAccount, life
 		payload.EmptyState = emptyStatePayload(snapshot, payload.RefreshActive)
 	}
 	return payload
+}
+
+func activeSelectionEligibility(cfg Config, planType string) string {
+	if !cfg.ExcludeFreeAccounts {
+		return "eligible"
+	}
+	switch normalizePlanType(planType) {
+	case "":
+		return "unknown_plan"
+	case "free":
+		return "all_free_only"
+	default:
+		return "eligible"
+	}
 }
 
 func rosterLifecyclePayload(lifecycle ManagementLifecycleSnapshot, snapshot StateSnapshot, now time.Time) RosterLifecyclePayload {
@@ -796,13 +840,44 @@ func accountStatusNote(account AccountState, dueReason string, snapshot StateSna
 	return ""
 }
 
-func nextStatusAuthID(ordered []ScheduledAccount) string {
-	for _, scheduled := range ordered {
-		if scheduled.Available {
-			return scheduled.AuthID
-		}
+func nextStatusAuthID(state StateSnapshot, ordered []ScheduledAccount) string {
+	if len(ordered) == 0 {
+		return ""
 	}
-	return ""
+	accountsByAuthID := make(map[string]AccountState, len(state.Accounts))
+	for _, account := range state.Accounts {
+		accountsByAuthID[account.AuthID] = account
+	}
+	active := make(map[string]struct{}, len(ordered))
+	accounts := make([]AccountView, 0, len(ordered))
+	candidates := make([]Candidate, 0, len(ordered))
+	for _, scheduled := range ordered {
+		if scheduled.AuthID == "" {
+			continue
+		}
+		active[scheduled.AuthID] = struct{}{}
+		candidates = append(candidates, Candidate{ID: scheduled.AuthID, Provider: "codex"})
+		view := scheduled.selectionView
+		if view.ID == "" {
+			account, ok := accountsByAuthID[scheduled.AuthID]
+			if !ok {
+				continue
+			}
+			view = accountViewFromState(account, state.Config, state.Now, nil)
+		}
+		accounts = append(accounts, view)
+	}
+	snapshot := SchedulerSnapshot{
+		ExcludeFreeAccounts: state.Config.ExcludeFreeAccounts,
+		Fallback:            state.Config.Fallback,
+		MonthlyMode:         state.Config.MonthlyMode,
+		SelectionStrategy:   state.Config.SelectionStrategy,
+		SubscriptionRanks:   subscriptionRanks(state.Config.SubscriptionOrder),
+		Accounts:            accounts,
+		ActiveHighestTier:   active,
+		AdmissionObserved:   true,
+	}
+	return SelectAccount(snapshot, candidates, state.Now).AuthID
 }
 
 func statusWindow(window *QuotaWindow, label string) StatusWindow {
@@ -1325,6 +1400,7 @@ var statusTemplateV2 = template.Must(template.New("status-v2").Funcs(template.Fu
 <div class="warning" id="resetProbeWarning" hidden><strong data-i18n="resetProbe.warningTitle">自动激活新的额度周期默认关闭</strong><span data-i18n="resetProbe.warningBody">开启后，调度器会在额度重置时间已到但新周期尚未生成时，发送一次极小的 Codex 请求尝试激活新周期。</span></div>
 <details class="section collapsible" id="settingsPanel" hidden><summary><span class="summary-toggle" aria-hidden="true">&gt;</span><span class="summary-text"><span class="summary-title" data-i18n="settings.title">调度设置</span><span class="summary-subtitle" data-i18n="settings.summary">默认配置已经都设置好了，正常情况下不需要手动设置。</span></span></summary><div class="collapsible-body">
 <label class="toggle"><span data-i18n="settings.handleEnabled">启用调度接管</span><input id="handleEnabled" type="checkbox"></label>
+<div class="setting-with-help"><label class="toggle"><span data-i18n="settings.excludeFreeAccounts">默认排除 Free 账号</span><input id="excludeFreeAccounts" name="exclude_free_accounts" type="checkbox"></label><p class="setting-help" data-i18n="settings.excludeFreeAccountsHelp">未知计划不由插件主动选择；全部合格请求候选均为已知 Free 时，本次放宽过滤并正常主动选择。</p></div>
 <label class="toggle"><span data-i18n="settings.usageFeedback">失败反馈标记额度耗尽</span><input id="usageFeedback" type="checkbox"></label>
 <div class="setting-with-help"><label class="toggle"><span data-i18n="settings.enableResetProbe">自动激活新的额度周期</span><input id="enableResetProbe" name="enable_reset_probe" type="checkbox"></label><p class="setting-help" data-i18n="settings.enableResetProbeHelp">当额度重置时间已经到达，但 OpenAI 尚未生成新的额度周期时，发送一次极小的 Codex 请求尝试激活新周期，然后重新读取额度确认结果。可能消耗少量额度。</p></div>
 <div class="setting-with-help"><label class="toggle"><span data-i18n="settings.provisionalProbe">账号列表未确认时仍允许额度探测（高风险）</span><input id="probeOnProvisionalRoster" name="probe_on_provisional_roster" type="checkbox"></label><p class="setting-help" data-i18n="settings.provisionalProbeHelp">CPA 暂时无法确认当前账号及优先级时，允许插件使用最近一次保存的账号列表执行额度重置探测。每次都会重新验证账号凭据，但仍无法保证账号未被删除或调整优先级。通常应保持关闭。</p></div>
@@ -1352,7 +1428,7 @@ var statusTemplateV2 = template.Must(template.New("status-v2").Funcs(template.Fu
 <div class="toolbar"><div><h2 data-i18n="queue.title">账号队列</h2><p data-i18n="queue.description">账号卡片按当前调度优先级排序。第一个可用账号就是下一次 Codex 请求会优先选择的账号。</p></div><div class="metrics"><span class="metric"><span data-i18n="metrics.nextAccount">下一账号</span>：<code id="metricNextAuthID">{{if .NextAuthID}}{{.NextAuthID}}{{else}}暂无{{end}}</code></span><span class="metric">Strategy：<code id="metricSelectionStrategy">{{if .SelectionStrategy}}{{.SelectionStrategy}}{{else}}legacy{{end}}</code></span><span class="metric">Monthly：<code id="metricMonthlyMode">{{if eq .MonthlyMode "priority"}}优先使用{{else}}按到期时间{{end}}</code></span><span class="metric"><span data-i18n="metrics.lastSelected">最近选择</span>：<code id="metricLastSelected">{{if .LastSelected}}{{.LastSelected}}{{else}}暂无{{end}}</code></span></div></div>
 <section class="queue" aria-label="账号卡片">{{range .Accounts}}<article class="card {{if and $.NextAuthID (eq $.NextAuthID .AuthID)}}next{{end}}" data-auth-id="{{.AuthID}}">
 <div class="cardTop"><div class="identity"><div class="titleLine"><span class="title">{{if .Alias}}{{.Alias}}{{else}}{{.AuthID}}{{end}}</span>{{if .Group}}<span class="groupPill">{{.Group}}</span>{{end}}</div><div class="sub"><code>{{.AuthID}}</code></div>{{if .Tags}}<div class="metaLine">{{range .Tags}}<span class="chip">{{.}}</span>{{end}}</div>{{end}}</div><span class="rank">#{{.Rank}}</span></div>
-<div class="badges">{{if and $.NextAuthID (eq $.NextAuthID .AuthID)}}<span class="badge next">下一优先</span>{{end}}{{if .Available}}<span class="badge ok">可用</span>{{else}}<span class="badge no">{{.UnavailableReason}}</span>{{end}}<span class="badge">{{if eq .Family "weekly"}}Weekly{{else if eq .Family "monthly"}}Monthly{{else}}未知类型{{end}}</span><span class="badge">订阅：{{if .PlanType}}{{.PlanType}}{{if .SubscriptionRank}} (rank {{.SubscriptionRank}}){{end}}{{else}}未知{{end}}</span><span class="badge">CPA 优先级 {{.CPAPriority}}</span><span class="badge">插件优先级 {{.SchedulerPriority}}</span><span class="badge">熔断：{{.Circuit.Label}}</span></div>
+<div class="badges">{{if and $.NextAuthID (eq $.NextAuthID .AuthID)}}<span class="badge next">下一优先</span>{{end}}{{if .Available}}<span class="badge ok">可用</span>{{else}}<span class="badge no">{{.UnavailableReason}}</span>{{end}}<span class="badge">{{if eq .Family "weekly"}}Weekly{{else if eq .Family "monthly"}}Monthly{{else}}未知类型{{end}}</span><span class="badge">订阅：{{if .PlanType}}{{.PlanType}}{{if .SubscriptionRank}} (rank {{.SubscriptionRank}}){{end}}{{else}}未知{{end}}</span><span class="badge">CPA 优先级 {{.CPAPriority}}</span><span class="badge">插件优先级 {{.SchedulerPriority}}</span><span class="badge">主动选择资格：{{.ActiveSelectionEligibility}}</span><span class="badge">熔断：{{.Circuit.Label}}</span></div>
 <div class="quotaList">{{if not .FiveHour.Missing}}<div class="quota-row"><div class="quota-head"><span class="quota-title">{{.FiveHour.Label}}</span><span>{{.FiveHour.DisplayText}}</span><span class="quota-reset">5 小时重置：<span class="localTime" data-time="{{.FiveHour.ResetText}}">{{.FiveHour.ResetText}}</span></span></div><div class="quota-bar"><div class="quota-fill {{if .FiveHour.Exhausted}}danger{{else if le .FiveHour.RemainingPercent 20.0}}warn{{end}}" style="width:{{printf "%.0f" .FiveHour.RemainingPercent}}%"></div></div></div>{{end}}<div class="quota-row"><div class="quota-head"><span class="quota-title">{{.LongWindow.Label}}</span><span>{{.LongWindow.DisplayText}}</span>{{if not .LongWindow.Missing}}<span class="quota-reset">长额度重置：<span class="localTime" data-time="{{.LongWindow.ResetText}}">{{.LongWindow.ResetText}}</span></span>{{end}}</div><div class="quota-bar"><div class="quota-fill {{if .LongWindow.Exhausted}}danger{{else if le .LongWindow.RemainingPercent 20.0}}warn{{end}}" style="width:{{printf "%.0f" .LongWindow.RemainingPercent}}%"></div></div></div></div>
 <div class="kv"><span>策略值</span><span>{{if .StrategyKnown}}{{.StrategyValue}}{{else}}未知{{end}}</span><span>瓶颈配额</span><span>{{if .BottleneckQuota.Known}}{{printf "%.1f%%" .BottleneckQuota.Remaining}}{{else}}未知{{end}}</span><span>订阅到期</span><span>{{if .SubscriptionExpiresText}}<span class="localTime" data-time="{{.SubscriptionExpiresText}}">{{.SubscriptionExpiresText}}</span>{{else}}未知{{end}}</span><span>缓存时间</span><span>{{if .CacheAge}}{{.CacheAge}}{{else}}暂无{{end}}</span><span>熔断计数</span><span>失败 {{.Circuit.FailureCount}} / 成功 {{.Circuit.SuccessCount}}{{if .Circuit.NextProbeText}}，半开 <span class="localTime" data-time="{{.Circuit.NextProbeText}}">{{.Circuit.NextProbeText}}</span>{{end}}</span><span>主动重置</span><span>{{if .ResetCreditsAvailableCount}}{{.ResetCreditsAvailableCount}} 次{{else}}暂无{{end}}{{if .ResetCreditsTotalEarnedCount}} / 累计 {{.ResetCreditsTotalEarnedCount}} 次{{end}}{{range .ResetCredits}}；{{if .Status}}{{.Status}} {{end}}有效期 <span class="localTime" data-time="{{.ExpiresAt}}">{{.ExpiresAt}}</span>{{end}}</span></div>
 {{if or .Notes .GroupNotes}}<div class="noteBlock">{{if .Notes}}<div>账号备注：{{.Notes}}</div>{{end}}{{if .GroupNotes}}<div>分组备注：{{.GroupNotes}}</div>{{end}}</div>{{end}}
@@ -1370,7 +1446,7 @@ const TRANSLATIONS={
   en:{
     'app.title':'Codex Quota Scheduler','app.subtitle':'Optimized Fill First scheduling. Configuration, aliases, groups, tags, and notes are saved in the plugin state file.','app.language':'Language','connection.managementKey':'CPA management key','connection.backgroundHint':'Once the scheduler is enabled, it runs in the background. This page does not need to stay open.',
     'resetProbe.warningTitle':'Automatic reset probe is off by default','resetProbe.warningBody':'Only after you check the box will the scheduler send one tiny Codex request when a reset looks lazy, nudging the next quota window to start.',
-    'settings.title':'Scheduler Settings','settings.summary':'Default configuration is ready; normally no manual changes are needed.','settings.handleEnabled':'Enable scheduler takeover','settings.usageFeedback':'Mark quota exhausted from failure feedback','settings.enableResetProbe':'Enable automatic reset probe','settings.enableResetProbeHelp':'When the quota reset time has arrived but OpenAI has not yet generated a new quota cycle, send one tiny Codex request to try to activate it, then read the quota again to confirm the result. This may consume a small amount of quota.','settings.provisionalProbe':'Allow quota probes when the account roster is unconfirmed (high risk)','settings.provisionalProbeHelp':'When CPA temporarily cannot confirm the current accounts and priorities, allow the plugin to use the most recently saved account roster for quota reset probes. Account credentials are revalidated every time, but the plugin still cannot guarantee that accounts have not been removed or reprioritized. This should normally remain off.','settings.monthlyMode':'Monthly mode','settings.expiryOrder':'Sort by expiry time','settings.monthlyPriority':'Prefer Monthly','settings.selectionStrategy':'Selection strategy','settings.strategyLegacy':'Legacy compatible order','settings.selectionStrategyHelp':'The strategy applies only after availability class and plugin priority. Unknown values sort after known values.','settings.subscriptionOrder':'Subscription order','settings.subscriptionOrderHelp':'Enter plans from low to high, separated by commas or new lines. Subscription strategies require a non-empty list without duplicates.','settings.refreshInterval':'Quota refresh interval','settings.staleAfter':'Stale cache threshold','settings.refreshActiveWindow':'Refresh active window','settings.refreshAfterResetDelay':'Refresh after reset delay','settings.refreshRetryDelays':'Refresh retry delays','settings.refreshOnStartup':'Refresh on startup','settings.maxConcurrency':'Max refresh concurrency','settings.circuitFailureThreshold':'Circuit failure threshold','settings.circuitOpenDuration':'Circuit open duration','settings.circuitHalfOpenSuccessThreshold':'Half-open recovery successes','settings.maxLogEntries':'Max log entries','settings.logRetention':'Log retention',
+'settings.title':'Scheduler Settings','settings.summary':'Default configuration is ready; normally no manual changes are needed.','settings.handleEnabled':'Enable scheduler takeover','settings.excludeFreeAccounts':'Exclude free accounts by default','settings.excludeFreeAccountsHelp':'Unknown plans are not actively selected. When all eligible request candidates are known Free, relax the filter and actively select as usual.','settings.usageFeedback':'Mark quota exhausted from failure feedback','settings.enableResetProbe':'Enable automatic reset probe','settings.enableResetProbeHelp':'When the quota reset time has arrived but OpenAI has not yet generated a new quota cycle, send one tiny Codex request to try to activate it, then read the quota again to confirm the result. This may consume a small amount of quota.','settings.provisionalProbe':'Allow quota probes when the account roster is unconfirmed (high risk)','settings.provisionalProbeHelp':'When CPA temporarily cannot confirm the current accounts and priorities, allow the plugin to use the most recently saved account roster for quota reset probes. Account credentials are revalidated every time, but the plugin still cannot guarantee that accounts have not been removed or reprioritized. This should normally remain off.','settings.monthlyMode':'Monthly mode','settings.expiryOrder':'Sort by expiry time','settings.monthlyPriority':'Prefer Monthly','settings.selectionStrategy':'Selection strategy','settings.strategyLegacy':'Legacy compatible order','settings.selectionStrategyHelp':'The strategy applies only after availability class and plugin priority. Unknown values sort after known values.','settings.subscriptionOrder':'Subscription order','settings.subscriptionOrderHelp':'Enter plans from low to high, separated by commas or new lines. Subscription strategies require a non-empty list without duplicates.','settings.refreshInterval':'Quota refresh interval','settings.staleAfter':'Stale cache threshold','settings.refreshActiveWindow':'Refresh active window','settings.refreshAfterResetDelay':'Refresh after reset delay','settings.refreshRetryDelays':'Refresh retry delays','settings.refreshOnStartup':'Refresh on startup','settings.maxConcurrency':'Max refresh concurrency','settings.circuitFailureThreshold':'Circuit failure threshold','settings.circuitOpenDuration':'Circuit open duration','settings.circuitHalfOpenSuccessThreshold':'Half-open recovery successes','settings.maxLogEntries':'Max log entries','settings.logRetention':'Log retention',
     'actions.loadData':'Load Data','actions.saveSettings':'Save Settings','actions.refreshQuota':'Refresh Quota','actions.exportConfig':'Export Config','actions.importConfig':'Import Config','actions.refreshLogs':'Refresh Logs','actions.exportLogs':'Export Logs','actions.close':'Close','actions.saveAccount':'Save Account','actions.cancel':'Cancel',
     'queue.title':'Account Queue','queue.description':'Account cards are sorted by the current scheduler priority. The first available account is preferred for the next Codex request.','metrics.nextAccount':'Next account','metrics.lastSelected':'Last selected',
     'logs.title':'Scheduler Logs','logs.empty':'No logs yet. Send a request or refresh quota manually to show records here.',
@@ -1381,7 +1457,7 @@ const TRANSLATIONS={
   'zh-CN':{
     'app.title':'Codex 额度调度器','app.subtitle':'优化版 Fill First。配置、别名、分组、标签和备注由插件内部状态文件保存。','app.language':'界面语言','connection.managementKey':'CPA 管理密钥','connection.backgroundHint':'只要调度器启动了，它就会在后台自动运行，无需保持页面开启。',
     'resetProbe.warningTitle':'自动激活新的额度周期默认关闭','resetProbe.warningBody':'开启后，调度器会在额度重置时间已到但新周期尚未生成时，发送一次极小的 Codex 请求尝试激活新周期。',
-    'settings.title':'调度设置','settings.summary':'默认配置已经都设置好了，正常情况下不需要手动设置。','settings.handleEnabled':'启用调度接管','settings.usageFeedback':'失败反馈标记额度耗尽','settings.enableResetProbe':'自动激活新的额度周期','settings.enableResetProbeHelp':'当额度重置时间已经到达，但 OpenAI 尚未生成新的额度周期时，发送一次极小的 Codex 请求尝试激活新周期，然后重新读取额度确认结果。可能消耗少量额度。','settings.provisionalProbe':'账号列表未确认时仍允许额度探测（高风险）','settings.provisionalProbeHelp':'CPA 暂时无法确认当前账号及优先级时，允许插件使用最近一次保存的账号列表执行额度重置探测。每次都会重新验证账号凭据，但仍无法保证账号未被删除或调整优先级。通常应保持关闭。','settings.monthlyMode':'月度账号使用方式','settings.expiryOrder':'按到期时间排序','settings.monthlyPriority':'优先使用月度账号','settings.selectionStrategy':'选择策略','settings.strategyLegacy':'Legacy（兼容旧排序）','settings.selectionStrategyHelp':'策略只在可用性等级和插件优先级相同时生效；未知数据排在已知数据之后。','settings.subscriptionOrder':'订阅顺序','settings.subscriptionOrderHelp':'按从低到高填写，以逗号或换行分隔。订阅策略必须配置且不能重复。','settings.refreshInterval':'额度刷新间隔','settings.staleAfter':'缓存过期判定','settings.refreshActiveWindow':'活跃刷新窗口','settings.refreshAfterResetDelay':'重置后刷新延迟','settings.refreshRetryDelays':'刷新失败重试间隔','settings.refreshOnStartup':'启动时刷新额度','settings.maxConcurrency':'最大并发刷新','settings.circuitFailureThreshold':'熔断失败阈值','settings.circuitOpenDuration':'熔断等待时间','settings.circuitHalfOpenSuccessThreshold':'半开恢复成功次数','settings.maxLogEntries':'最大日志条数','settings.logRetention':'日志保留时间',
+    'settings.title':'调度设置','settings.summary':'默认配置已经都设置好了，正常情况下不需要手动设置。','settings.handleEnabled':'启用调度接管','settings.excludeFreeAccounts':'默认排除 Free 账号','settings.excludeFreeAccountsHelp':'未知计划不由插件主动选择；全部合格请求候选均为已知 Free 时，本次放宽过滤并正常主动选择。','settings.usageFeedback':'失败反馈标记额度耗尽','settings.enableResetProbe':'自动激活新的额度周期','settings.enableResetProbeHelp':'当额度重置时间已经到达，但 OpenAI 尚未生成新的额度周期时，发送一次极小的 Codex 请求尝试激活新周期，然后重新读取额度确认结果。可能消耗少量额度。','settings.provisionalProbe':'账号列表未确认时仍允许额度探测（高风险）','settings.provisionalProbeHelp':'CPA 暂时无法确认当前账号及优先级时，允许插件使用最近一次保存的账号列表执行额度重置探测。每次都会重新验证账号凭据，但仍无法保证账号未被删除或调整优先级。通常应保持关闭。','settings.monthlyMode':'月度账号使用方式','settings.expiryOrder':'按到期时间排序','settings.monthlyPriority':'优先使用月度账号','settings.selectionStrategy':'选择策略','settings.strategyLegacy':'Legacy（兼容旧排序）','settings.selectionStrategyHelp':'策略只在可用性等级和插件优先级相同时生效；未知数据排在已知数据之后。','settings.subscriptionOrder':'订阅顺序','settings.subscriptionOrderHelp':'按从低到高填写，以逗号或换行分隔。订阅策略必须配置且不能重复。','settings.refreshInterval':'额度刷新间隔','settings.staleAfter':'缓存过期判定','settings.refreshActiveWindow':'活跃刷新窗口','settings.refreshAfterResetDelay':'重置后刷新延迟','settings.refreshRetryDelays':'刷新失败重试间隔','settings.refreshOnStartup':'启动时刷新额度','settings.maxConcurrency':'最大并发刷新','settings.circuitFailureThreshold':'熔断失败阈值','settings.circuitOpenDuration':'熔断等待时间','settings.circuitHalfOpenSuccessThreshold':'半开恢复成功次数','settings.maxLogEntries':'最大日志条数','settings.logRetention':'日志保留时间',
     'actions.loadData':'加载数据','actions.saveSettings':'保存设置','actions.refreshQuota':'刷新额度','actions.exportConfig':'导出配置','actions.importConfig':'导入配置','actions.refreshLogs':'刷新日志','actions.exportLogs':'导出日志','actions.close':'关闭','actions.saveAccount':'保存账号','actions.cancel':'取消',
     'queue.title':'账号队列','queue.description':'账号卡片按当前调度优先级排序。第一个可用账号就是下一次 Codex 请求会优先选择的账号。','metrics.nextAccount':'下一账号','metrics.lastSelected':'最近选择',
     'logs.title':'调度日志','logs.empty':'暂无日志。发起请求或手动刷新额度后，这里会显示记录。',
@@ -1453,7 +1529,7 @@ async function refreshStatus(options){const opts=options||{};const data=await re
 function startStatusPolling(){if(statusPollID)return;statusPollID=window.setInterval(()=>refreshStatus({management:true}).catch(()=>{}),15000)}
 async function loadStatus(){try{await refreshStatus({management:true,fillSettings:true});showNotice(t('notice.statusLoaded'),false);startStatusPolling()}catch(error){showNotice(error.message||String(error),true)}}
 async function pollStatus(times,delayMs){for(let i=0;i<times;i++){await new Promise((resolve)=>window.setTimeout(resolve,delayMs));await refreshStatus()}}
-function collectSettingsPayload(){const selectionStrategy=document.getElementById('selectionStrategy').value;const subscriptionOrder=document.getElementById('subscriptionOrder').value.split(/[\n,]/).map((item)=>item.trim()).filter(Boolean);if((selectionStrategy==='subscription_high'||selectionStrategy==='subscription_low')&&subscriptionOrder.length===0)throw new Error(currentLocale==='en'?'Subscription order is required for subscription strategies.':'订阅策略必须配置非空订阅顺序。');return{handle_enabled:document.getElementById('handleEnabled').checked,enable_usage_feedback:document.getElementById('usageFeedback').checked,enable_reset_probe:document.getElementById('enableResetProbe').checked,probe_on_provisional_roster:document.getElementById('probeOnProvisionalRoster').checked,monthly_mode:document.getElementById('monthlyMode').value,selection_strategy:selectionStrategy,subscription_order:subscriptionOrder,quota_refresh_interval:document.getElementById('refreshInterval').value.trim(),stale_after:document.getElementById('staleAfter').value.trim(),refresh_active_window:document.getElementById('refreshActiveWindow').value.trim(),refresh_after_reset_delay:document.getElementById('refreshAfterResetDelay').value.trim(),refresh_retry_delays:document.getElementById('refreshRetryDelays').value.trim(),refresh_on_startup:document.getElementById('refreshOnStartup').checked,max_refresh_concurrency:Number.parseInt(document.getElementById('maxConcurrency').value,10)||1,circuit_failure_threshold:Number.parseInt(document.getElementById('circuitFailureThreshold').value,10)||5,circuit_open_duration:document.getElementById('circuitOpenDuration').value.trim(),circuit_half_open_success_threshold:Number.parseInt(document.getElementById('circuitHalfOpenSuccessThreshold').value,10)||2,max_log_entries:Number.parseInt(document.getElementById('maxLogEntries').value,10)||200,log_retention:document.getElementById('logRetention').value.trim()}}
+function collectSettingsPayload(){const selectionStrategy=document.getElementById('selectionStrategy').value;const subscriptionOrder=document.getElementById('subscriptionOrder').value.split(/[\n,]/).map((item)=>item.trim()).filter(Boolean);if((selectionStrategy==='subscription_high'||selectionStrategy==='subscription_low')&&subscriptionOrder.length===0)throw new Error(currentLocale==='en'?'Subscription order is required for subscription strategies.':'订阅策略必须配置非空订阅顺序。');return{handle_enabled:document.getElementById('handleEnabled').checked,exclude_free_accounts:document.getElementById('excludeFreeAccounts').checked,enable_usage_feedback:document.getElementById('usageFeedback').checked,enable_reset_probe:document.getElementById('enableResetProbe').checked,probe_on_provisional_roster:document.getElementById('probeOnProvisionalRoster').checked,monthly_mode:document.getElementById('monthlyMode').value,selection_strategy:selectionStrategy,subscription_order:subscriptionOrder,quota_refresh_interval:document.getElementById('refreshInterval').value.trim(),stale_after:document.getElementById('staleAfter').value.trim(),refresh_active_window:document.getElementById('refreshActiveWindow').value.trim(),refresh_after_reset_delay:document.getElementById('refreshAfterResetDelay').value.trim(),refresh_retry_delays:document.getElementById('refreshRetryDelays').value.trim(),refresh_on_startup:document.getElementById('refreshOnStartup').checked,max_refresh_concurrency:Number.parseInt(document.getElementById('maxConcurrency').value,10)||1,circuit_failure_threshold:Number.parseInt(document.getElementById('circuitFailureThreshold').value,10)||5,circuit_open_duration:document.getElementById('circuitOpenDuration').value.trim(),circuit_half_open_success_threshold:Number.parseInt(document.getElementById('circuitHalfOpenSuccessThreshold').value,10)||2,max_log_entries:Number.parseInt(document.getElementById('maxLogEntries').value,10)||200,log_retention:document.getElementById('logRetention').value.trim()}}
 function node(tag,className,text){const item=document.createElement(tag);if(className)item.className=className;if(text!==undefined)item.textContent=text;return item}
 function addKV(parent,key,value){parent.append(node('span','',key),node('span','',value||'暂无'))}
 function addBadge(text,className){return node('span','badge '+(className||''),text)}
@@ -1461,12 +1537,12 @@ function addQuota(windowData,label){const row=node('div','quota-row');const head
 function dateLocale(){return currentLocale==='en'?'en-US':'zh-CN'}
 function resetCreditSummary(account){const parts=[];if(account.reset_credits_available_count==null){parts.push('暂无')}else{parts.push(String(account.reset_credits_available_count)+' 次')}if(account.reset_credits_total_earned_count!=null)parts.push('/ 累计 '+account.reset_credits_total_earned_count+' 次');for(const credit of account.reset_credits||[]){const raw=credit.expires_at||'';if(!raw)continue;const date=new Date(raw);const expiry=Number.isNaN(date.getTime())?raw:date.toLocaleString(dateLocale(),{hour12:false});parts.push('；'+(credit.status?credit.status+' ':'')+'有效期 '+expiry)}return parts.join(' ')}
 function renderEmptyState(){const empty=STATUS.empty_state||{};const title=empty.title||'暂无账号数据';const message=empty.message||'等待额度刷新后，这里会显示账号卡片。';const box=node('div','empty','');box.append(node('strong','',title),node('div','',message));return box}
-function renderAccounts(accounts){const queue=document.querySelector('section.queue');if(!queue)return;queue.replaceChildren();const items=Array.isArray(accounts)?accounts:[];if(items.length===0){queue.append(renderEmptyState());return}for(const account of items){const card=node('article','card '+(STATUS.next_auth_id&&STATUS.next_auth_id===account.auth_id?'next':''));card.dataset.authId=account.auth_id||'';const top=node('div','cardTop');const identity=node('div','identity');const titleLine=node('div','titleLine');titleLine.append(node('span','title',account.alias||account.auth_id||''));if(account.group)titleLine.append(node('span','groupPill',account.group));identity.append(titleLine);const sub=node('div','sub');const code=document.createElement('code');code.textContent=account.auth_id||'';sub.append(code);identity.append(sub);if(account.tags&&account.tags.length){const tags=node('div','metaLine');for(const tag of account.tags)tags.append(node('span','chip',tag));identity.append(tags)}top.append(identity,node('span','rank','#'+(account.rank||'')));card.append(top);const badges=node('div','badges');if(STATUS.next_auth_id&&STATUS.next_auth_id===account.auth_id)badges.append(addBadge('下一优先','next'));badges.append(account.available?addBadge('可用','ok'):addBadge(labelUnavailableReason(account.unavailable_reason),'no'));const planRank=account.subscription_rank==null?'':' (rank '+account.subscription_rank+')';badges.append(addBadge(account.family||'未知类型'),addBadge('订阅：'+(account.plan_type||'未知')+planRank),addBadge('CPA 优先级 '+(account.cpa_priority||0)),addBadge('插件优先级 '+(account.scheduler_priority||0)),addBadge('熔断：'+((account.circuit&&account.circuit.label)||'')));if(account.auth_failure)badges.append(addBadge('请重新登录','no'));if(account.refresh_due_reason)badges.append(addBadge(labelDueReason(account.refresh_due_reason)));card.append(badges);const quotaList=node('div','quotaList');if(account.five_hour&&!account.five_hour.missing)quotaList.append(addQuota(account.five_hour,'5 小时额度'));if(account.long_window)quotaList.append(addQuota(account.long_window,account.long_window.label||'长额度'));card.append(quotaList);const kv=node('div','kv');addKV(kv,'策略值',account.strategy_known?account.strategy_value:(currentLocale==='en'?'Unknown':'未知'));addKV(kv,'瓶颈配额',account.bottleneck_quota&&account.bottleneck_quota.known?account.bottleneck_quota.remaining+'%':(currentLocale==='en'?'Unknown':'未知'));addKV(kv,'订阅到期',account.subscription_expires_text|| (currentLocale==='en'?'Unknown':'未知'));addKV(kv,'缓存时间',account.cache_age||'暂无');addKV(kv,'熔断计数','失败 '+((account.circuit&&account.circuit.failure_count)||0)+' / 成功 '+((account.circuit&&account.circuit.success_count)||0));addKV(kv,'主动重置',resetCreditSummary(account));if(account.status_note)addKV(kv,'调度状态',account.status_note);if(account.last_error)addKV(kv,'最后错误',account.last_error);if(account.next_retry_text)addKV(kv,'下次重试',account.next_retry_text);card.append(kv);if(account.notes||account.group_notes){const notes=node('div','noteBlock');if(account.notes)notes.append(node('div','',account.notes));if(account.group_notes)notes.append(node('div','',account.group_notes));card.append(notes)}const actions=node('div','cardActions');const refresh=node('button','ghost refreshOne','刷新额度');refresh.type='button';refresh.addEventListener('click',()=>refreshOneQuota(account.auth_id||''));const edit=node('button','secondary openEdit','编辑');edit.type='button';edit.addEventListener('click',()=>openEdit(account.auth_id||''));actions.append(refresh,edit);card.append(actions);queue.append(card)}formatLocalTimes()}
+function renderAccounts(accounts){const queue=document.querySelector('section.queue');if(!queue)return;queue.replaceChildren();const items=Array.isArray(accounts)?accounts:[];if(items.length===0){queue.append(renderEmptyState());return}for(const account of items){const card=node('article','card '+(STATUS.next_auth_id&&STATUS.next_auth_id===account.auth_id?'next':''));card.dataset.authId=account.auth_id||'';const top=node('div','cardTop');const identity=node('div','identity');const titleLine=node('div','titleLine');titleLine.append(node('span','title',account.alias||account.auth_id||''));if(account.group)titleLine.append(node('span','groupPill',account.group));identity.append(titleLine);const sub=node('div','sub');const code=document.createElement('code');code.textContent=account.auth_id||'';sub.append(code);identity.append(sub);if(account.tags&&account.tags.length){const tags=node('div','metaLine');for(const tag of account.tags)tags.append(node('span','chip',tag));identity.append(tags)}top.append(identity,node('span','rank','#'+(account.rank||'')));card.append(top);const badges=node('div','badges');if(STATUS.next_auth_id&&STATUS.next_auth_id===account.auth_id)badges.append(addBadge('下一优先','next'));badges.append(account.available?addBadge('可用','ok'):addBadge(labelUnavailableReason(account.unavailable_reason),'no'));const planRank=account.subscription_rank==null?'':' (rank '+account.subscription_rank+')';badges.append(addBadge(account.family||'未知类型'),addBadge('订阅：'+(account.plan_type||'未知')+planRank),addBadge('CPA 优先级 '+(account.cpa_priority||0)),addBadge('插件优先级 '+(account.scheduler_priority||0)),addBadge((currentLocale==='en'?'Active selection eligibility: ':'主动选择资格：')+(account.active_selection_eligibility||'eligible')),addBadge('熔断：'+((account.circuit&&account.circuit.label)||'')));if(account.auth_failure)badges.append(addBadge('请重新登录','no'));if(account.refresh_due_reason)badges.append(addBadge(labelDueReason(account.refresh_due_reason)));card.append(badges);const quotaList=node('div','quotaList');if(account.five_hour&&!account.five_hour.missing)quotaList.append(addQuota(account.five_hour,'5 小时额度'));if(account.long_window)quotaList.append(addQuota(account.long_window,account.long_window.label||'长额度'));card.append(quotaList);const kv=node('div','kv');addKV(kv,'策略值',account.strategy_known?account.strategy_value:(currentLocale==='en'?'Unknown':'未知'));addKV(kv,'瓶颈配额',account.bottleneck_quota&&account.bottleneck_quota.known?account.bottleneck_quota.remaining+'%':(currentLocale==='en'?'Unknown':'未知'));addKV(kv,'订阅到期',account.subscription_expires_text|| (currentLocale==='en'?'Unknown':'未知'));addKV(kv,'缓存时间',account.cache_age||'暂无');addKV(kv,'熔断计数','失败 '+((account.circuit&&account.circuit.failure_count)||0)+' / 成功 '+((account.circuit&&account.circuit.success_count)||0));addKV(kv,'主动重置',resetCreditSummary(account));if(account.status_note)addKV(kv,'调度状态',account.status_note);if(account.last_error)addKV(kv,'最后错误',account.last_error);if(account.next_retry_text)addKV(kv,'下次重试',account.next_retry_text);card.append(kv);if(account.notes||account.group_notes){const notes=node('div','noteBlock');if(account.notes)notes.append(node('div','',account.notes));if(account.group_notes)notes.append(node('div','',account.group_notes));card.append(notes)}const actions=node('div','cardActions');const refresh=node('button','ghost refreshOne','刷新额度');refresh.type='button';refresh.addEventListener('click',()=>refreshOneQuota(account.auth_id||''));const edit=node('button','secondary openEdit','编辑');edit.type='button';edit.addEventListener('click',()=>openEdit(account.auth_id||''));actions.append(refresh,edit);card.append(actions);queue.append(card)}formatLocalTimes()}
 
 async function readJSON(resp){const text=await resp.text();if(!text)return{};try{return JSON.parse(text)}catch{return{error:text}}}
 function authHeaders(){const input=document.getElementById('managementKey');const key=(input&&input.value||'').trim();if(!key)throw new Error(t('error.managementKeyRequired'));const name='Author'+'ization';const scheme='Bea'+'rer ';const headers={};headers[name]=key.toLowerCase().startsWith(scheme.toLowerCase())?key:scheme+key;return headers}
 async function requestManagement(path,options){const opts=options||{};const headers=authHeaders();let url=MANAGEMENT_BASE+path;if(opts.query){const params=new URLSearchParams(opts.query);url+='?'+params.toString()}const init={method:opts.method||'GET',headers};if(Object.prototype.hasOwnProperty.call(opts,'body')){headers['Content-Type']=opts.contentType||'application/json';init.body=typeof opts.body==='string'?opts.body:JSON.stringify(opts.body)}const resp=await fetch(url,init);const data=await readJSON(resp);if(!resp.ok)throw new Error(data.error||data.message||t('error.requestFailed',{status:resp.status}));return data}
-function fillSettings(){const s=STATUS.settings||{};document.getElementById('handleEnabled').checked=s.handle_enabled!==false;document.getElementById('usageFeedback').checked=s.enable_usage_feedback!==false;document.getElementById('enableResetProbe').checked=s.enable_reset_probe===true;document.getElementById('probeOnProvisionalRoster').checked=s.probe_on_provisional_roster===true;document.getElementById('monthlyMode').value=s.monthly_mode||'expiry_order';document.getElementById('selectionStrategy').value=s.selection_strategy||'';document.getElementById('subscriptionOrder').value=(s.subscription_order||[]).join(', ');document.getElementById('refreshInterval').value=s.quota_refresh_interval||'30m0s';document.getElementById('staleAfter').value=s.stale_after||'5h0m0s';document.getElementById('refreshActiveWindow').value=s.refresh_active_window||'1h0m0s';document.getElementById('refreshAfterResetDelay').value=s.refresh_after_reset_delay||'1m0s';document.getElementById('refreshRetryDelays').value=s.refresh_retry_delays||'1m0s,5m0s,15m0s';document.getElementById('refreshOnStartup').checked=s.refresh_on_startup===true;document.getElementById('maxConcurrency').value=s.max_refresh_concurrency||1;document.getElementById('circuitFailureThreshold').value=s.circuit_failure_threshold||5;document.getElementById('circuitOpenDuration').value=s.circuit_open_duration||'30m0s';document.getElementById('circuitHalfOpenSuccessThreshold').value=s.circuit_half_open_success_threshold||2;document.getElementById('maxLogEntries').value=s.max_log_entries||200;document.getElementById('logRetention').value=s.log_retention||'24h0m0s'}
+function fillSettings(){const s=STATUS.settings||{};document.getElementById('handleEnabled').checked=s.handle_enabled!==false;document.getElementById('excludeFreeAccounts').checked=s.exclude_free_accounts!==false;document.getElementById('usageFeedback').checked=s.enable_usage_feedback!==false;document.getElementById('enableResetProbe').checked=s.enable_reset_probe===true;document.getElementById('probeOnProvisionalRoster').checked=s.probe_on_provisional_roster===true;document.getElementById('monthlyMode').value=s.monthly_mode||'expiry_order';document.getElementById('selectionStrategy').value=s.selection_strategy||'';document.getElementById('subscriptionOrder').value=(s.subscription_order||[]).join(', ');document.getElementById('refreshInterval').value=s.quota_refresh_interval||'30m0s';document.getElementById('staleAfter').value=s.stale_after||'5h0m0s';document.getElementById('refreshActiveWindow').value=s.refresh_active_window||'1h0m0s';document.getElementById('refreshAfterResetDelay').value=s.refresh_after_reset_delay||'1m0s';document.getElementById('refreshRetryDelays').value=s.refresh_retry_delays||'1m0s,5m0s,15m0s';document.getElementById('refreshOnStartup').checked=s.refresh_on_startup===true;document.getElementById('maxConcurrency').value=s.max_refresh_concurrency||1;document.getElementById('circuitFailureThreshold').value=s.circuit_failure_threshold||5;document.getElementById('circuitOpenDuration').value=s.circuit_open_duration||'30m0s';document.getElementById('circuitHalfOpenSuccessThreshold').value=s.circuit_half_open_success_threshold||2;document.getElementById('maxLogEntries').value=s.max_log_entries||200;document.getElementById('logRetention').value=s.log_retention||'24h0m0s'}
 async function saveSettings(){try{if(!statusLoaded){await loadStatus();return}await requestManagement('/settings',{method:'PUT',body:collectSettingsPayload()});settingsDirty=false;showNotice(t('notice.settingsSaved'),false);await refreshStatus({management:true,fillSettings:true})}catch(error){showNotice(error.message||String(error),true)}}
 async function refreshQuota(){try{await requestManagement('/refresh',{method:'POST'});showNotice(t('notice.refreshRequested'),false);await refreshStatus({management:true});pollStatus(3,1200)}catch(error){showNotice(error.message||String(error),true)}}
 function splitTags(text){return text.split(',').map((item)=>item.trim()).filter(Boolean)}

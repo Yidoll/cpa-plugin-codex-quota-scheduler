@@ -1045,12 +1045,7 @@ func (r *QuotaRefresher) recordAuthScan(auths []pluginapi.HostAuthFileEntry, adm
 	if r.state == nil {
 		return
 	}
-	count := 0
-	for _, auth := range auths {
-		if _, admitted := admission.AuthIDs[auth.ID]; isRefreshEligible(auth) && admitted {
-			count++
-		}
-	}
+	count := len(filterAdmittedAuths(auths, admission))
 	r.state.RecordAuthScanIfAdmissionCurrent(version, count, r.now())
 }
 
@@ -1130,13 +1125,15 @@ func (r *QuotaRefresher) refreshOneAuthIDVersioned(authID string, version uint64
 		return errCPAAdmissionChanged
 	}
 	for _, auth := range auths {
-		if auth.ID != authID {
+		normalizedID := strings.TrimSpace(auth.ID)
+		if normalizedID != authID {
 			continue
 		}
-		if !isRefreshEligible(auth) {
+		normalized, eligible := normalizeRefreshEligibleAuth(auth)
+		if !eligible {
 			return fmt.Errorf("auth %s is not eligible for quota refresh", authID)
 		}
-		r.refreshAuthVersionedSource(auth, version, SourceManualRefresh)
+		r.refreshAuthVersionedSource(normalized, version, SourceManualRefresh)
 		return nil
 	}
 	if !r.state.BeginCPAAdmissionCall(authID, version) {
@@ -2040,17 +2037,30 @@ func accountStateFromAuth(auth pluginapi.HostAuthFileEntry, now time.Time) Accou
 }
 
 func isRefreshEligible(auth pluginapi.HostAuthFileEntry) bool {
-	return strings.EqualFold(auth.Provider, "codex") &&
-		!auth.Disabled &&
-		!auth.Unavailable &&
-		auth.AuthIndex != ""
+	_, ok := normalizeRefreshEligibleAuth(auth)
+	return ok
+}
+
+func normalizeRefreshEligibleAuth(auth pluginapi.HostAuthFileEntry) (pluginapi.HostAuthFileEntry, bool) {
+	id, authIndex, reason := normalizeEligibleCodexAuth(auth.ID, auth.AuthIndex, auth.Provider, auth.Disabled, auth.Unavailable)
+	if reason != HostAuthEligible {
+		return pluginapi.HostAuthFileEntry{}, false
+	}
+	auth.ID = id
+	auth.AuthIndex = authIndex
+	auth.Provider = "codex"
+	return auth, true
 }
 
 func filterAdmittedAuths(auths []pluginapi.HostAuthFileEntry, admission CPAAdmissionState) []pluginapi.HostAuthFileEntry {
 	filtered := make([]pluginapi.HostAuthFileEntry, 0, len(auths))
 	for _, auth := range auths {
-		if _, admitted := admission.AuthIDs[auth.ID]; isRefreshEligible(auth) && admitted {
-			filtered = append(filtered, auth)
+		normalized, eligible := normalizeRefreshEligibleAuth(auth)
+		if !eligible {
+			continue
+		}
+		if _, admitted := admission.AuthIDs[normalized.ID]; admitted {
+			filtered = append(filtered, normalized)
 		}
 	}
 	return filtered

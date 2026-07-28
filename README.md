@@ -1,5 +1,26 @@
 # Codex Quota Scheduler
 
+## v0.4.0 account eligibility
+
+v0.4.0 filters disabled, unavailable, non-Codex, and structurally incomplete
+Host Auth entries before calculating the authoritative highest CPA priority
+tier. Binding, admission, background refresh, and immutable scheduler snapshots
+therefore use the same eligible roster.
+
+The new `exclude_free_accounts` setting defaults to `true`. Only a normalized
+plan value exactly equal to `free` is free; an empty plan is unknown, and every
+other non-empty value, including `trial`, `team`, `plus`, and `pro`, is known
+non-free. When a request contains a known non-free admitted candidate, the
+plugin actively selects only among known non-free candidates. Unknown plans are
+not actively selected. If every admitted candidate in the request is known
+free, the plugin relaxes the filter for that request and selects a free account
+using the existing availability and strategy order.
+
+The configured CPA fallback remains unchanged and may still select an original
+free or unknown candidate. To restore the v0.3.x active-selection behavior, set
+`exclude_free_accounts: false`; no state-file deletion or host protocol change
+is required.
+
 ## v0.3.1 strategy loading and diagnostics fix
 
 v0.3.1 makes the two strategy fields presence-aware. Configuration is merged
@@ -165,6 +186,7 @@ The default scheduler settings are:
 
 ```yaml
 handle_enabled: true
+exclude_free_accounts: true
 quota_refresh_interval: 30m
 stale_after: 5h
 refresh_active_window: 1h
@@ -184,6 +206,12 @@ circuit_half_open_success_threshold: 2
 max_log_entries: 200
 log_retention: 24h
 ```
+
+`exclude_free_accounts` is presence-aware across lifecycle YAML, persisted
+Management settings, import, and export. An explicit lifecycle value overrides
+the saved value for that lifecycle without deleting it; omitting the field
+restores the persisted value. Old user data that lacks the field uses the safe
+default `true`.
 
 `monthly_mode` accepts:
 
@@ -312,13 +340,13 @@ make build
 Build and package the release zip:
 
 ```bash
-make package VERSION=0.3.1
+make package VERSION=0.4.0
 ```
 
 Generate an aggregate checksum file for local release assets:
 
 ```bash
-make checksums VERSION=0.3.1
+make checksums VERSION=0.4.0
 ```
 
 Windows users can also use the PowerShell helper:
@@ -332,7 +360,8 @@ compiler such as MinGW-w64 on `PATH`.
 
 ## GitHub Releases
 
-Version `0.3.1` fixes lifecycle strategy loading, atomic configuration
+Version `0.4.0` adds authoritative roster eligibility filtering and the
+default-on free/unknown active-selection policy. Version `0.3.1` fixes lifecycle strategy loading, atomic configuration
 publication, and safe `WaitingRoster` diagnostics. Version `0.3.0` adds the five
 explicit account-selection strategies. Version `0.2.0` completes the
 spec-driven scheduler refactor, including
@@ -354,8 +383,8 @@ this repository. GitHub Actions builds release assets when a tag matching `v*`
 is pushed. Use a dotted numeric version tag such as:
 
 ```bash
-git tag -a v0.3.1 -m "v0.3.1"
-git push origin v0.3.1
+git tag -a v0.4.0 -m "v0.4.0"
+git push origin v0.4.0
 ```
 
 The `Build` workflow runs tests and creates the release automatically. Release
@@ -366,21 +395,21 @@ codex-quota-scheduler_<version>_<goos>_<goarch>.zip
 checksums.txt
 ```
 
-For `v0.3.1`, the expected platform assets are:
+For `v0.4.0`, the expected platform assets are:
 
-- `codex-quota-scheduler_0.3.1_darwin_amd64.zip`
-- `codex-quota-scheduler_0.3.1_darwin_arm64.zip`
-- `codex-quota-scheduler_0.3.1_freebsd_amd64.zip`
-- `codex-quota-scheduler_0.3.1_linux_amd64.zip`
-- `codex-quota-scheduler_0.3.1_linux_arm64.zip`
-- `codex-quota-scheduler_0.3.1_windows_amd64.zip`
-- `codex-quota-scheduler_0.3.1_windows_arm64.zip`
+- `codex-quota-scheduler_0.4.0_darwin_amd64.zip`
+- `codex-quota-scheduler_0.4.0_darwin_arm64.zip`
+- `codex-quota-scheduler_0.4.0_freebsd_amd64.zip`
+- `codex-quota-scheduler_0.4.0_linux_amd64.zip`
+- `codex-quota-scheduler_0.4.0_linux_arm64.zip`
+- `codex-quota-scheduler_0.4.0_windows_amd64.zip`
+- `codex-quota-scheduler_0.4.0_windows_arm64.zip`
 - `checksums.txt`
 
 `checksums.txt` uses sha256sum format:
 
 ```text
-<sha256>  codex-quota-scheduler_0.3.1_darwin_arm64.zip
+<sha256>  codex-quota-scheduler_0.4.0_darwin_arm64.zip
 ```
 
 ## Management API

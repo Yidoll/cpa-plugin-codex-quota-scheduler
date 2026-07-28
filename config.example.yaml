@@ -1,4 +1,10 @@
 handle_enabled: true
+# Default-on active-selection policy. Only normalized "free" is free. Empty
+# plans are unknown and are not actively selected. If all eligible request
+# candidates are known free, the filter is relaxed for that request. Set false
+# to restore the v0.3.x active-selection behavior; CPA fallback may still select
+# an original free or unknown candidate.
+exclude_free_accounts: true
 quota_refresh_interval: 30m
 stale_after: 5h
 refresh_active_window: 1h
