@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -314,11 +315,17 @@ func TestSchedulerPickObservesOneImmutablePublication(t *testing.T) {
 func TestStrategyPickReadsPublishedSnapshotWithoutHostCallbacks(t *testing.T) {
 	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 	host := &countingProductionHost{}
+	previousSnapshot := publishedSchedulerSnapshot.Load()
+	previousStatePath := defaultStatePath
+	invalidStatePath := filepath.Join(t.TempDir()+string(rune(0)), "state.json")
+	defaultStatePath = func() string { return invalidStatePath }
 	refresherMu.Lock()
 	previousRefresher := globalRefresher
 	globalRefresher = &QuotaRefresher{host: host}
 	refresherMu.Unlock()
 	t.Cleanup(func() {
+		defaultStatePath = previousStatePath
+		publishedSchedulerSnapshot.Store(previousSnapshot)
 		refresherMu.Lock()
 		globalRefresher = previousRefresher
 		refresherMu.Unlock()

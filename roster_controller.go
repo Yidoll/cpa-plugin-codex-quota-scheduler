@@ -14,6 +14,11 @@ const (
 	provisionalMaxAge   = 4 * time.Hour
 )
 
+var (
+	errAuthoritativeRosterUnavailable = errors.New("authoritative host roster unavailable")
+	errNoConfirmedCodexTier           = errors.New("authoritative host roster has no confirmed codex tier")
+)
+
 func provisionalAgeValid(now, confirmedAt time.Time) bool {
 	if confirmedAt.IsZero() {
 		return false
@@ -23,12 +28,24 @@ func provisionalAgeValid(now, confirmedAt time.Time) bool {
 }
 
 type RosterHealth string
+type RosterSyncResult string
+type RosterSyncErrorCategory string
 
 const (
 	RosterWaiting    RosterHealth = "WaitingRoster"
 	RosterHealthy    RosterHealth = "Healthy"
 	RosterDegraded   RosterHealth = "Degraded"
 	RosterFailClosed RosterHealth = "FailClosed"
+)
+
+const (
+	RosterSyncSucceeded RosterSyncResult = "success"
+	RosterSyncFailed    RosterSyncResult = "failed"
+
+	RosterSyncErrorHostUnavailable RosterSyncErrorCategory = "host_unavailable"
+	RosterSyncErrorHostCall        RosterSyncErrorCategory = "host_call_failed"
+	RosterSyncErrorNoCodexTier     RosterSyncErrorCategory = "no_codex_tier"
+	RosterSyncErrorPublish         RosterSyncErrorCategory = "publish_failed"
 )
 
 // ActiveRoster is an immutable value. Instances and Entries are copied on
@@ -47,6 +64,8 @@ type ActiveRoster struct {
 	DegradedSince     time.Time
 	Health            RosterHealth
 	BackgroundAllowed bool
+	LastSyncResult    RosterSyncResult
+	LastSyncError     RosterSyncErrorCategory
 }
 
 type RosterControllerOptions struct {
@@ -207,7 +226,7 @@ func (c *RosterController) sync(ctx context.Context, force bool) (ActiveRoster, 
 
 func (c *RosterController) list(ctx context.Context) ([]RosterEntry, error) {
 	if c.host == nil {
-		return nil, errors.New("authoritative host roster unavailable")
+		return nil, errAuthoritativeRosterUnavailable
 	}
 	return c.host.ListHostAuths(ctx)
 }
@@ -225,10 +244,12 @@ func (c *RosterController) finishSync(ctx context.Context, entries []RosterEntry
 	}
 	done := c.inFlight
 	old := cloneActiveRoster(c.current)
+	errorCategory := rosterSyncErrorCategory(syncErr)
 	if syncErr == nil {
 		priority, ids, ok := HighestCodexTier(entries)
 		if !ok {
-			syncErr = errors.New("authoritative host roster has no confirmed codex tier")
+			syncErr = errNoConfirmedCodexTier
+			errorCategory = RosterSyncErrorNoCodexTier
 		} else {
 			filtered := filterRosterEntries(entries, ids)
 			generation := old.Generation
@@ -240,12 +261,17 @@ func (c *RosterController) finishSync(ctx context.Context, entries []RosterEntry
 			if c.publish != nil {
 				var committed ActiveRoster
 				committed, syncErr = c.publish(ctx, cloneActiveRoster(next))
+				if syncErr != nil {
+					errorCategory = RosterSyncErrorPublish
+				}
 				if syncErr == nil && committed.Generation > next.Generation {
 					next.Generation = committed.Generation
 				}
 			}
 			c.mu.Lock()
 			if syncErr == nil {
+				next.LastSyncResult = RosterSyncSucceeded
+				next.LastSyncError = ""
 				if next.LifecycleRevision <= c.current.LifecycleRevision {
 					next.LifecycleRevision = c.current.LifecycleRevision + 1
 				}
@@ -259,6 +285,8 @@ func (c *RosterController) finishSync(ctx context.Context, entries []RosterEntry
 	}
 	if syncErr != nil {
 		c.current = degradedRoster(old, now)
+		c.current.LastSyncResult = RosterSyncFailed
+		c.current.LastSyncError = errorCategory
 		c.current.LifecycleRevision = old.LifecycleRevision + 1
 	}
 	c.lastErr = syncErr
@@ -268,6 +296,19 @@ func (c *RosterController) finishSync(ctx context.Context, entries []RosterEntry
 	c.mu.Unlock()
 	c.notify(out)
 	return out, syncErr
+}
+
+func rosterSyncErrorCategory(err error) RosterSyncErrorCategory {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, errAuthoritativeRosterUnavailable):
+		return RosterSyncErrorHostUnavailable
+	case errors.Is(err, errNoConfirmedCodexTier):
+		return RosterSyncErrorNoCodexTier
+	default:
+		return RosterSyncErrorHostCall
+	}
 }
 
 func degradedRoster(old ActiveRoster, now time.Time) ActiveRoster {

@@ -1,5 +1,24 @@
 # Codex Quota Scheduler
 
+## v0.3.1 strategy loading and diagnostics fix
+
+v0.3.1 makes the two strategy fields presence-aware. Configuration is merged
+in this order: defaults, persisted Management settings, then strategy fields
+explicitly present in lifecycle YAML. Omitting `selection_strategy` or
+`subscription_order` retains its persisted value. Setting either field to an
+explicit empty value or `null` overrides its effective value for the current
+lifecycle; an empty strategy restores the legacy `monthly_mode` ordering. This
+override does not delete the saved Management setting, so a later lifecycle
+configuration that omits the field restores the persisted value.
+
+When Management settings are saved, validated configuration, persisted user
+data, and immutable scheduler snapshots are committed consistently. While CPA
+has not confirmed an authoritative roster, the scheduler remains in
+`WaitingRoster` and uses the configured fallback without discarding the selected
+strategy. Status and logs distinguish roster, candidate, admission, and ordering
+outcomes with fixed non-sensitive reason categories. A successful authoritative
+roster sync resumes the loaded strategy without requiring reconfiguration.
+
 ## v0.3.0 configurable selection strategies
 
 v0.3.0 adds five explicit account-selection strategies while keeping the
@@ -185,6 +204,16 @@ subscription_order:
   - pro
 ```
 
+Management settings persist across plugin lifecycle reconfiguration. Strategy
+fields explicitly present in lifecycle YAML take precedence over those saved
+settings. An omitted field keeps its persisted value; an explicit empty value
+or `null` overrides it with an empty effective value for the current lifecycle
+without deleting the saved Management setting. A later lifecycle configuration
+that omits the field restores that saved value. An empty effective
+`selection_strategy` selects the legacy order, and an empty effective
+`subscription_order` is valid only when the effective strategy is not a
+subscription strategy.
+
 The Management UI shows the active strategy value for every account, including
 the bottleneck quota, normalized plan/rank, subscription expiry, or an explicit
 unknown state. Strategy changes are validated before the previous configuration
@@ -214,7 +243,11 @@ normal refresh Dormant and Probe windows in `WaitingRoster`. The
 `probe_on_provisional_roster` setting is an explicit risk option and defaults to
 `false`; provisional data never becomes authoritative merely because an account
 appears among scheduler candidates. A later successful authoritative roster
-sync automatically recovers Capability B to Capability A.
+sync automatically recovers Capability B to Capability A and resumes the
+already loaded selection strategy without reconfiguration. During
+`WaitingRoster`, fallback diagnostics retain the effective strategy and report
+zero authoritative admissions instead of treating scheduler candidates as an
+authoritative roster.
 
 Normal quota refresh makes no real requests while Dormant. Probe scheduling is
 independent and may pre-wake roster synchronization before a due window.
@@ -279,13 +312,13 @@ make build
 Build and package the release zip:
 
 ```bash
-make package VERSION=0.3.0
+make package VERSION=0.3.1
 ```
 
 Generate an aggregate checksum file for local release assets:
 
 ```bash
-make checksums VERSION=0.2.0
+make checksums VERSION=0.3.1
 ```
 
 Windows users can also use the PowerShell helper:
@@ -299,7 +332,10 @@ compiler such as MinGW-w64 on `PATH`.
 
 ## GitHub Releases
 
-Version `0.2.0` completes the spec-driven scheduler refactor, including
+Version `0.3.1` fixes lifecycle strategy loading, atomic configuration
+publication, and safe `WaitingRoster` diagnostics. Version `0.3.0` adds the five
+explicit account-selection strategies. Version `0.2.0` completes the
+spec-driven scheduler refactor, including
 authoritative roster lifecycle handling, persisted single-lease reset probes,
 Codex quota-window compatibility, availability-ordered management queues, and
 bilingual settings guidance. Historical version `0.1.6` isolates CPA priority
@@ -318,8 +354,8 @@ this repository. GitHub Actions builds release assets when a tag matching `v*`
 is pushed. Use a dotted numeric version tag such as:
 
 ```bash
-git tag -a v0.2.0 -m "v0.2.0"
-git push origin v0.2.0
+git tag -a v0.3.1 -m "v0.3.1"
+git push origin v0.3.1
 ```
 
 The `Build` workflow runs tests and creates the release automatically. Release
@@ -330,21 +366,21 @@ codex-quota-scheduler_<version>_<goos>_<goarch>.zip
 checksums.txt
 ```
 
-For `v0.2.0`, the expected platform assets are:
+For `v0.3.1`, the expected platform assets are:
 
-- `codex-quota-scheduler_0.2.0_darwin_amd64.zip`
-- `codex-quota-scheduler_0.2.0_darwin_arm64.zip`
-- `codex-quota-scheduler_0.2.0_freebsd_amd64.zip`
-- `codex-quota-scheduler_0.2.0_linux_amd64.zip`
-- `codex-quota-scheduler_0.2.0_linux_arm64.zip`
-- `codex-quota-scheduler_0.2.0_windows_amd64.zip`
-- `codex-quota-scheduler_0.2.0_windows_arm64.zip`
+- `codex-quota-scheduler_0.3.1_darwin_amd64.zip`
+- `codex-quota-scheduler_0.3.1_darwin_arm64.zip`
+- `codex-quota-scheduler_0.3.1_freebsd_amd64.zip`
+- `codex-quota-scheduler_0.3.1_linux_amd64.zip`
+- `codex-quota-scheduler_0.3.1_linux_arm64.zip`
+- `codex-quota-scheduler_0.3.1_windows_amd64.zip`
+- `codex-quota-scheduler_0.3.1_windows_arm64.zip`
 - `checksums.txt`
 
 `checksums.txt` uses sha256sum format:
 
 ```text
-<sha256>  codex-quota-scheduler_0.2.0_darwin_arm64.zip
+<sha256>  codex-quota-scheduler_0.3.1_darwin_arm64.zip
 ```
 
 ## Management API

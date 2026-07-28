@@ -8,14 +8,18 @@ import (
 )
 
 type PickDecision struct {
-	AuthID          string
-	Handled         bool
-	DelegateBuiltin string
-	Reason          string
-	Ordered         []ScheduledAccount
-	Strategy        SelectionStrategy
-	StrategyKnown   bool
-	StrategyValue   string
+	AuthID             string
+	Handled            bool
+	DelegateBuiltin    string
+	Reason             string
+	Ordered            []ScheduledAccount
+	Strategy           SelectionStrategy
+	StrategyKnown      bool
+	StrategyValue      string
+	CandidateCount     int
+	AdmittedCount      int
+	OrderedCount       int
+	UnavailableSummary string
 }
 
 type ScheduledAccount struct {
@@ -75,16 +79,21 @@ func codexCandidateCount(req pluginapi.SchedulerPickRequest) int {
 }
 
 func PickCodexAccount(req pluginapi.SchedulerPickRequest, snapshot StateSnapshot, now time.Time) PickDecision {
+	base := PickDecision{Strategy: snapshot.Config.SelectionStrategy, StrategyValue: "unknown", CandidateCount: codexCandidateCount(req)}
 	if !snapshot.Config.HandleEnabled {
-		return PickDecision{Reason: "handle_disabled"}
+		base.Reason = "handle_disabled"
+		return base
 	}
 	if !requestIncludesCodex(req) {
-		return PickDecision{Reason: "provider_not_codex"}
+		base.Reason = "provider_not_codex"
+		return base
 	}
 
 	ordered := BuildOrderedAccounts(req, snapshot, now)
+	base.Ordered, base.AdmittedCount, base.OrderedCount = ordered, len(ordered), scheduledAvailableCount(ordered)
 	if len(ordered) == 0 {
-		return PickDecision{Reason: "no_codex_candidates", Ordered: ordered}
+		base.Reason = "no_codex_candidates"
+		return base
 	}
 	for _, account := range ordered {
 		if account.Available {
@@ -95,19 +104,31 @@ func PickCodexAccount(req pluginapi.SchedulerPickRequest, snapshot StateSnapshot
 				Reason:   "selected",
 				Ordered:  ordered,
 				Strategy: snapshot.Config.SelectionStrategy, StrategyKnown: known, StrategyValue: value,
+				CandidateCount: base.CandidateCount, AdmittedCount: base.AdmittedCount, OrderedCount: base.OrderedCount,
 			}
 		}
 	}
 
 	if snapshot.Config.Fallback == FallbackFillFirst {
-		return PickDecision{
-			Handled:         true,
-			DelegateBuiltin: pluginapi.SchedulerBuiltinFillFirst,
-			Reason:          "fallback_fill_first",
-			Ordered:         ordered,
+		base.Handled = true
+		base.DelegateBuiltin = pluginapi.SchedulerBuiltinFillFirst
+		base.Reason = "fallback_fill_first"
+		base.UnavailableSummary = unavailableSummary(ordered)
+		return base
+	}
+	base.Reason = "no_selectable_account"
+	base.UnavailableSummary = unavailableSummary(ordered)
+	return base
+}
+
+func scheduledAvailableCount(accounts []ScheduledAccount) int {
+	count := 0
+	for _, account := range accounts {
+		if account.Available {
+			count++
 		}
 	}
-	return PickDecision{Reason: "no_selectable_account", Ordered: ordered}
+	return count
 }
 
 func BuildOrderedAccounts(req pluginapi.SchedulerPickRequest, snapshot StateSnapshot, now time.Time) []ScheduledAccount {

@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,14 +16,12 @@ func cleanupIntegrationGlobals(t *testing.T) {
 	t.Helper()
 
 	previousState := globalState
-	previousConfig, hadConfig := currentConfig.Load().(Config)
 	refresherMu.Lock()
 	previousRefresher := globalRefresher
 	globalRefresher = nil
 	refresherMu.Unlock()
 	previousRefreshSoon := managementRefreshSoon
 	managementRefreshSoon = func() {}
-	currentConfig = atomic.Value{}
 
 	t.Cleanup(func() {
 		refresherMu.Lock()
@@ -36,10 +33,6 @@ func cleanupIntegrationGlobals(t *testing.T) {
 		refresherMu.Unlock()
 
 		globalState = previousState
-		currentConfig = atomic.Value{}
-		if hadConfig {
-			currentConfig.Store(previousConfig)
-		}
 		managementRefreshSoon = previousRefreshSoon
 	})
 }

@@ -82,6 +82,19 @@ func (s *PluginState) ReplaceConfig(cfg Config) error {
 	return nil
 }
 
+func (s *PluginState) ReplaceConfigAndAnnotations(cfg Config, annotations AnnotationState) error {
+	cfg, err := ValidateConfig(cfg)
+	if err != nil {
+		return err
+	}
+	annotations = NormalizeAnnotationState(annotations)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cfg = cloneConfig(cfg)
+	s.annotations = cloneAnnotationState(annotations)
+	return nil
+}
+
 func (s *PluginState) Config() Config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

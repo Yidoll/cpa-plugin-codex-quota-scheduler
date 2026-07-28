@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	currentConfig          atomic.Value
+	configCommitMu         sync.RWMutex
 	globalState            = NewPluginState(DefaultConfig())
 	globalTrials           = NewTrialRegistry()
 	globalEvidenceIntents  = make(chan EvidenceIntent, 64)
@@ -67,25 +67,41 @@ func configure(raw []byte) error {
 			return err
 		}
 	}
-	cfg, err := DecodeConfig(req.ConfigYAML)
+	lifecycleConfig, err := decodeConfig(req.ConfigYAML, false)
 	if err != nil {
 		return err
 	}
-	disk, loadedDisk, err := loadUserDataWithMigration(semanticStatePaths(defaultStatePath()), OSFileHooks(), nil)
+	overlay, err := decodeStrategyConfigOverlay(req.ConfigYAML)
+	if err != nil {
+		return err
+	}
+	configCommitMu.Lock()
+	defer configCommitMu.Unlock()
+	paths := semanticStatePaths(defaultStatePath())
+	previewDisk, previewLoaded, err := previewUserDataWithMigration(paths)
+	if err != nil {
+		return err
+	}
+	cfg := lifecycleConfig
+	if previewLoaded {
+		cfg = previewDisk.Config
+	}
+	cfg, err = applyStrategyConfigOverlay(cfg, overlay)
+	if err != nil {
+		return err
+	}
+	disk, loadedDisk, err := loadUserDataWithMigration(paths, OSFileHooks(), nil)
 	if err == nil && loadedDisk {
-		cfg = disk.Config
+		cfg, err = applyStrategyConfigOverlay(disk.Config, overlay)
+		if err != nil {
+			return err
+		}
 	} else {
 		disk = PluginDiskState{Config: cfg}
 	}
-	cfg, err = ValidateConfig(cfg)
-	if err != nil {
+	if err := globalState.ReplaceConfigAndAnnotations(cfg, AnnotationState{Accounts: disk.Accounts, Groups: disk.Groups}); err != nil {
 		return err
 	}
-	if err := globalState.ReplaceConfig(cfg); err != nil {
-		return err
-	}
-	currentConfig.Store(cloneConfig(cfg))
-	globalState.SetAnnotations(AnnotationState{Accounts: disk.Accounts, Groups: disk.Groups})
 	startEvidenceConsumer()
 	publishSchedulerState(globalState, nil, time.Now())
 	return nil
@@ -137,14 +153,20 @@ func logSchedulerDecision(store *PluginState, req pluginapi.SchedulerPickRequest
 	level := "info"
 	event := "scheduler.unhandled"
 	message := "请求未由插件接管"
+	orderedCount := decision.OrderedCount
+	if orderedCount == 0 && len(decision.Ordered) > 0 {
+		orderedCount = len(decision.Ordered)
+	}
 	fields := map[string]any{
 		"model":              req.Model,
 		"provider":           req.Provider,
 		"reason":             decision.Reason,
-		"ordered_count":      len(decision.Ordered),
-		"selection_strategy": decision.Strategy,
+		"candidate_count":    decision.CandidateCount,
+		"admitted_count":     decision.AdmittedCount,
+		"ordered_count":      orderedCount,
+		"selection_strategy": displaySelectionStrategy(decision.Strategy),
 		"strategy_known":     decision.StrategyKnown,
-		"strategy_value":     decision.StrategyValue,
+		"strategy_value":     displayStrategyValue(decision.StrategyValue),
 	}
 	if decision.AuthID != "" {
 		event = "scheduler.selected"
@@ -160,12 +182,30 @@ func logSchedulerDecision(store *PluginState, req pluginapi.SchedulerPickRequest
 		event = "scheduler.fallback"
 		message = "插件触发内置调度 fallback"
 		fields["fallback"] = decision.DelegateBuiltin
-		fields["unavailable_summary"] = unavailableSummary(decision.Ordered)
+		summary := decision.UnavailableSummary
+		if summary == "" {
+			summary = unavailableSummary(decision.Ordered)
+		}
+		fields["unavailable_summary"] = summary
 	} else if decision.Handled {
 		event = "scheduler.handled"
 		message = "插件已处理但未选择账号"
 	}
 	store.RecordLog(level, event, message, fields, now)
+}
+
+func displaySelectionStrategy(strategy SelectionStrategy) string {
+	if strategy == "" {
+		return "legacy"
+	}
+	return string(strategy)
+}
+
+func displayStrategyValue(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "unknown"
+	}
+	return value
 }
 
 func findScheduledAccount(accounts []ScheduledAccount, authID string) (ScheduledAccount, bool) {
@@ -181,7 +221,7 @@ func unavailableSummary(accounts []ScheduledAccount) string {
 	if len(accounts) == 0 {
 		return "no ordered candidates"
 	}
-	parts := make([]string, 0, len(accounts))
+	counts := make(map[string]int, len(accounts))
 	for _, account := range accounts {
 		reason := account.UnavailableReason
 		if reason == "" && account.Available {
@@ -190,7 +230,16 @@ func unavailableSummary(accounts []ScheduledAccount) string {
 		if reason == "" {
 			reason = string(account.QueueStatus)
 		}
-		parts = append(parts, fmt.Sprintf("%s:%s:%s", account.AuthID, account.QueueStatus, reason))
+		counts[reason]++
+	}
+	reasons := make([]string, 0, len(counts))
+	for reason := range counts {
+		reasons = append(reasons, reason)
+	}
+	sort.Strings(reasons)
+	parts := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		parts = append(parts, fmt.Sprintf("%s=%d", reason, counts[reason]))
 	}
 	return strings.Join(parts, "; ")
 }

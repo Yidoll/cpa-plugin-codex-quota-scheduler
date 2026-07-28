@@ -34,9 +34,24 @@ func oracleClassify(a AccountView, now time.Time) AvailabilityClass {
 func oracleSelect(snapshot SchedulerSnapshot, candidates []Candidate, now time.Time) SelectionResult {
 	candidate := map[string]bool{}
 	for _, c := range candidates {
-		if c.Provider == "codex" {
+		if c.Provider == "codex" && c.ID != "" {
 			candidate[c.ID] = true
 		}
+	}
+	if len(candidate) == 0 {
+		return SelectionResult{Reason: "no_codex_candidates", Fallback: snapshot.Fallback == FallbackFillFirst}
+	}
+	if len(snapshot.ActiveHighestTier) == 0 {
+		return SelectionResult{Reason: "waiting_roster", Fallback: snapshot.Fallback == FallbackFillFirst}
+	}
+	admitted := 0
+	for id := range candidate {
+		if _, ok := snapshot.ActiveHighestTier[id]; ok {
+			admitted++
+		}
+	}
+	if admitted == 0 {
+		return SelectionResult{Reason: "no_admitted_candidates", Fallback: snapshot.Fallback == FallbackFillFirst}
 	}
 	best := map[AvailabilityClass]*AccountView{}
 	for i := range snapshot.Accounts {

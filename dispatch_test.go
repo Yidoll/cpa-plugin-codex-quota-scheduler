@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -249,7 +251,7 @@ func TestLogSchedulerDecisionIncludesDetailedFallbackReason(t *testing.T) {
 		DelegateBuiltin: pluginapi.SchedulerBuiltinFillFirst,
 		Reason:          "fallback_fill_first",
 		Ordered: []ScheduledAccount{
-			{AuthID: "five-hour", QueueStatus: QueueStatusFiveHourExhausted, UnavailableReason: "five_hour_exhausted"},
+			{AuthID: "user@example.com/Authorization:SECRET", QueueStatus: QueueStatusFiveHourExhausted, UnavailableReason: "five_hour_exhausted"},
 			{AuthID: "weekly", QueueStatus: QueueStatusLongWindowExhausted, UnavailableReason: "weekly_exhausted"},
 		},
 	}
@@ -269,6 +271,9 @@ func TestLogSchedulerDecisionIncludesDetailedFallbackReason(t *testing.T) {
 	}
 	if fields["unavailable_summary"] == "" {
 		t.Fatalf("unavailable_summary empty; fields=%#v", fields)
+	}
+	if summary := fmt.Sprint(fields["unavailable_summary"]); strings.Contains(summary, "SECRET") || strings.Contains(summary, "Authorization") || strings.Contains(summary, "user@example.com") {
+		t.Fatalf("unavailable_summary leaked auth id: %s", summary)
 	}
 }
 

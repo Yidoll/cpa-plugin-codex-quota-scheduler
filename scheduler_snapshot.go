@@ -1,6 +1,10 @@
 package main
 
 import (
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -15,6 +19,7 @@ type SchedulerSnapshot struct {
 	SubscriptionRanks map[string]int
 	Accounts          []AccountView
 	ActiveHighestTier map[string]struct{}
+	AdmissionObserved bool
 	Trials            *TrialRegistry
 	EvidenceIntents   chan<- EvidenceIntent
 	AdmissionVersion  uint64
@@ -29,6 +34,7 @@ type EvidenceIntent struct {
 }
 
 var publishedSchedulerSnapshot atomic.Pointer[SchedulerSnapshot]
+var schedulerStatePublicationMu sync.Mutex
 
 func PublishSchedulerSnapshot(snapshot *SchedulerSnapshot) {
 	if snapshot == nil {
@@ -65,13 +71,13 @@ func cloneStringSet(in map[string]struct{}) map[string]struct{} {
 func schedulerPickPublished(req pluginapi.SchedulerPickRequest, now time.Time) PickDecision {
 	snapshot := publishedSchedulerSnapshot.Load()
 	if snapshot == nil {
-		return PickDecision{Reason: "handle_disabled"}
+		return PickDecision{Reason: "handle_disabled", StrategyValue: "unknown", CandidateCount: codexCandidateCount(req)}
 	}
 	if !requestIncludesCodex(req) {
-		return PickDecision{Reason: "provider_not_codex"}
+		return PickDecision{Reason: "provider_not_codex", Strategy: snapshot.SelectionStrategy, StrategyValue: "unknown", CandidateCount: codexCandidateCount(req)}
 	}
 	if !snapshot.HandleEnabled {
-		return observeSchedulerDecision(snapshot, req, PickDecision{Reason: "handle_disabled"}, now)
+		return observeSchedulerDecision(snapshot, req, PickDecision{Reason: "handle_disabled", Strategy: snapshot.SelectionStrategy, StrategyValue: "unknown", CandidateCount: codexCandidateCount(req)}, now)
 	}
 	if snapshot.Activity != nil {
 		snapshot.Activity(req, snapshot.AdmissionVersion, now)
@@ -98,12 +104,46 @@ func schedulerPickPublished(req pluginapi.SchedulerPickRequest, now time.Time) P
 	}
 	if result.AuthID != "" {
 		known, value := strategySortValue(result.Ordered[0], SelectionPolicy{Strategy: snapshot.SelectionStrategy, MonthlyMode: snapshot.MonthlyMode, SubscriptionRanks: snapshot.SubscriptionRanks, Now: now})
-		return observeSchedulerDecision(snapshot, req, PickDecision{AuthID: result.AuthID, Handled: true, Reason: "selected", Strategy: snapshot.SelectionStrategy, StrategyKnown: known, StrategyValue: value}, now)
+		return observeSchedulerDecision(snapshot, req, selectionPickDecision(snapshot, result, PickDecision{AuthID: result.AuthID, Handled: true, Reason: "selected", StrategyKnown: known, StrategyValue: value}), now)
 	}
 	if snapshot.Fallback == FallbackFillFirst {
-		return observeSchedulerDecision(snapshot, req, PickDecision{Handled: true, DelegateBuiltin: pluginapi.SchedulerBuiltinFillFirst, Reason: result.Reason}, now)
+		return observeSchedulerDecision(snapshot, req, selectionPickDecision(snapshot, result, PickDecision{Handled: true, DelegateBuiltin: pluginapi.SchedulerBuiltinFillFirst, Reason: result.Reason}), now)
 	}
-	return observeSchedulerDecision(snapshot, req, PickDecision{Reason: result.Reason}, now)
+	return observeSchedulerDecision(snapshot, req, selectionPickDecision(snapshot, result, PickDecision{Reason: result.Reason}), now)
+}
+
+func selectionPickDecision(snapshot *SchedulerSnapshot, result SelectionResult, decision PickDecision) PickDecision {
+	decision.Strategy = snapshot.SelectionStrategy
+	if decision.StrategyValue == "" {
+		decision.StrategyValue = "unknown"
+	}
+	decision.CandidateCount = result.CandidateCount
+	decision.AdmittedCount = result.AdmittedCount
+	decision.OrderedCount = len(result.Ordered)
+	if decision.AuthID == "" {
+		decision.UnavailableSummary = selectionUnavailableSummary(result)
+	}
+	return decision
+}
+
+func selectionUnavailableSummary(result SelectionResult) string {
+	if len(result.Unavailable) == 0 {
+		return result.Reason
+	}
+	counts := make(map[string]int, len(result.Unavailable))
+	for _, unavailable := range result.Unavailable {
+		counts[unavailable.Reason]++
+	}
+	reasons := make([]string, 0, len(counts))
+	for reason := range counts {
+		reasons = append(reasons, reason)
+	}
+	sort.Strings(reasons)
+	parts := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		parts = append(parts, fmt.Sprintf("%s=%d", reason, counts[reason]))
+	}
+	return strings.Join(parts, "; ")
 }
 
 func observeSchedulerDecision(snapshot *SchedulerSnapshot, req pluginapi.SchedulerPickRequest, decision PickDecision, now time.Time) PickDecision {
@@ -125,7 +165,7 @@ func schedulerSnapshotFromState(state StateSnapshot, trials *TrialRegistry) *Sch
 		activity = pump.enqueue
 		observation = pump.enqueueObservation
 	}
-	return &SchedulerSnapshot{HandleEnabled: state.Config.HandleEnabled, Fallback: state.Config.Fallback, MonthlyMode: state.Config.MonthlyMode, SelectionStrategy: state.Config.SelectionStrategy, SubscriptionRanks: subscriptionRanks(state.Config.SubscriptionOrder), Accounts: accounts, ActiveHighestTier: active, Trials: trials, EvidenceIntents: globalEvidenceIntents, Activity: activity, Observation: observation}
+	return &SchedulerSnapshot{HandleEnabled: state.Config.HandleEnabled, Fallback: state.Config.Fallback, MonthlyMode: state.Config.MonthlyMode, SelectionStrategy: state.Config.SelectionStrategy, SubscriptionRanks: subscriptionRanks(state.Config.SubscriptionOrder), Accounts: accounts, ActiveHighestTier: active, AdmissionObserved: state.CPAAdmission.Observed, Trials: trials, EvidenceIntents: globalEvidenceIntents, Activity: activity, Observation: observation}
 }
 
 func accountViewFromState(a AccountState, cfg Config, now time.Time, trials *TrialRegistry) AccountView {
@@ -166,6 +206,12 @@ func accountViewFromState(a AccountState, cfg Config, now time.Time, trials *Tri
 }
 
 func publishSchedulerState(state *PluginState, active map[string]struct{}, now time.Time) {
+	schedulerStatePublicationMu.Lock()
+	defer schedulerStatePublicationMu.Unlock()
+	publishSchedulerStateLocked(state, active, now)
+}
+
+func publishSchedulerStateLocked(state *PluginState, active map[string]struct{}, now time.Time) {
 	if state == nil {
 		return
 	}
@@ -174,7 +220,7 @@ func publishSchedulerState(state *PluginState, active map[string]struct{}, now t
 		s.CPAAdmission = CPAAdmissionState{Observed: true, AuthIDs: cloneStringSet(active)}
 	}
 	snapshot := schedulerSnapshotFromState(s, globalTrials)
-	_, snapshot.AdmissionVersion = state.CPAAdmissionVersioned()
+	snapshot.AdmissionVersion = s.CPAAdmissionVersion
 	PublishSchedulerSnapshot(snapshot)
 }
 func accountExhaustion(a AccountState, now time.Time) (bool, time.Time) {

@@ -22,26 +22,27 @@ var managementRefreshOneSoon = func(authID string) {}
 var managementProvisionalRiskChanged = func(bool) {}
 
 type StatusPayload struct {
-	PluginID              string                 `json:"plugin_id"`
-	GeneratedAt           time.Time              `json:"generated_at"`
-	Shell                 bool                   `json:"shell,omitempty"`
-	NextAuthID            string                 `json:"next_auth_id"`
-	MonthlyMode           MonthlyMode            `json:"monthly_mode"`
-	SelectionStrategy     SelectionStrategy      `json:"selection_strategy"`
-	HandleEnabled         bool                   `json:"handle_enabled"`
-	LastSelected          string                 `json:"last_selected"`
-	LastReason            string                 `json:"last_reason"`
-	RefreshActive         bool                   `json:"refresh_active"`
-	RefreshState          string                 `json:"refresh_state"`
-	LastCodexActivityText string                 `json:"last_codex_activity_text,omitempty"`
-	LastAuthScanText      string                 `json:"last_auth_scan_text,omitempty"`
-	CodexAuthCount        int                    `json:"codex_auth_count"`
-	Roster                RosterLifecyclePayload `json:"roster"`
-	EmptyState            EmptyStatePayload      `json:"empty_state,omitempty"`
-	Settings              SettingsPayload        `json:"settings"`
-	Accounts              []StatusAccount        `json:"accounts"`
-	Groups                []StatusGroup          `json:"groups,omitempty"`
-	Logs                  []LogEntry             `json:"logs"`
+	PluginID                 string                 `json:"plugin_id"`
+	GeneratedAt              time.Time              `json:"generated_at"`
+	Shell                    bool                   `json:"shell,omitempty"`
+	NextAuthID               string                 `json:"next_auth_id"`
+	MonthlyMode              MonthlyMode            `json:"monthly_mode"`
+	SelectionStrategy        SelectionStrategy      `json:"selection_strategy"`
+	SelectionStrategyDisplay string                 `json:"selection_strategy_display"`
+	HandleEnabled            bool                   `json:"handle_enabled"`
+	LastSelected             string                 `json:"last_selected"`
+	LastReason               string                 `json:"last_reason"`
+	RefreshActive            bool                   `json:"refresh_active"`
+	RefreshState             string                 `json:"refresh_state"`
+	LastCodexActivityText    string                 `json:"last_codex_activity_text,omitempty"`
+	LastAuthScanText         string                 `json:"last_auth_scan_text,omitempty"`
+	CodexAuthCount           int                    `json:"codex_auth_count"`
+	Roster                   RosterLifecyclePayload `json:"roster"`
+	EmptyState               EmptyStatePayload      `json:"empty_state,omitempty"`
+	Settings                 SettingsPayload        `json:"settings"`
+	Accounts                 []StatusAccount        `json:"accounts"`
+	Groups                   []StatusGroup          `json:"groups,omitempty"`
+	Logs                     []LogEntry             `json:"logs"`
 }
 
 type ManagementLifecycleSnapshot struct {
@@ -51,27 +52,30 @@ type ManagementLifecycleSnapshot struct {
 }
 
 type RosterLifecyclePayload struct {
-	Capability          HostCapability `json:"capability"`
-	Health              RosterHealth   `json:"health"`
-	Confirmed           bool           `json:"confirmed"`
-	Provisional         bool           `json:"provisional"`
-	Degraded            bool           `json:"degraded"`
-	FailClosed          bool           `json:"fail_closed"`
-	WaitingRoster       bool           `json:"waiting_roster"`
-	BackgroundAllowed   bool           `json:"background_allowed"`
-	HighestPriority     int            `json:"highest_priority"`
-	Generation          uint64         `json:"generation"`
-	AdmissionObserved   bool           `json:"admission_observed"`
-	AdmissionVersion    uint64         `json:"admission_version"`
-	AdmissionPriority   int            `json:"admission_priority"`
-	AdmittedAuthCount   int            `json:"admitted_auth_count"`
-	RosterEntryCount    int            `json:"roster_entry_count"`
-	RosterInstanceCount int            `json:"roster_instance_count"`
-	CredentialAmbiguous bool           `json:"credential_ambiguous"`
-	RiskOptionEnabled   bool           `json:"risk_option_enabled"`
-	RiskOptionAvailable bool           `json:"risk_option_available"`
-	Warning             string         `json:"warning,omitempty"`
-	RiskWarning         string         `json:"risk_warning,omitempty"`
+	Capability          HostCapability          `json:"capability"`
+	Health              RosterHealth            `json:"health"`
+	Confirmed           bool                    `json:"confirmed"`
+	Provisional         bool                    `json:"provisional"`
+	Degraded            bool                    `json:"degraded"`
+	FailClosed          bool                    `json:"fail_closed"`
+	WaitingRoster       bool                    `json:"waiting_roster"`
+	BackgroundAllowed   bool                    `json:"background_allowed"`
+	HighestPriority     int                     `json:"highest_priority"`
+	Generation          uint64                  `json:"generation"`
+	AdmissionObserved   bool                    `json:"admission_observed"`
+	AdmissionVersion    uint64                  `json:"admission_version"`
+	AdmissionPriority   int                     `json:"admission_priority"`
+	AdmittedAuthCount   int                     `json:"admitted_auth_count"`
+	RosterEntryCount    int                     `json:"roster_entry_count"`
+	RosterInstanceCount int                     `json:"roster_instance_count"`
+	CredentialAmbiguous bool                    `json:"credential_ambiguous"`
+	RiskOptionEnabled   bool                    `json:"risk_option_enabled"`
+	RiskOptionAvailable bool                    `json:"risk_option_available"`
+	Warning             string                  `json:"warning,omitempty"`
+	RiskWarning         string                  `json:"risk_warning,omitempty"`
+	LastSyncAt          *time.Time              `json:"last_sync_at,omitempty"`
+	LastSyncResult      RosterSyncResult        `json:"last_sync_result,omitempty"`
+	LastSyncError       RosterSyncErrorCategory `json:"last_sync_error_category,omitempty"`
 }
 
 type EmptyStatePayload struct {
@@ -236,7 +240,10 @@ func handleManagementRequest(store *PluginState, req pluginapi.ManagementRequest
 	case method == http.MethodGet && path == "/status":
 		return handleStatusRequest(store, req, now, lifecycle)
 	case method == http.MethodGet && path == "/settings":
-		return jsonManagementResponse(http.StatusOK, SettingsFromConfig(store.Config()))
+		configCommitMu.RLock()
+		response := jsonManagementResponse(http.StatusOK, SettingsFromConfig(store.Config()))
+		configCommitMu.RUnlock()
+		return response
 	case method == http.MethodPut && path == "/settings":
 		return handlePutSettings(store, req, now)
 	case method == http.MethodPost && path == "/refresh":
@@ -246,13 +253,19 @@ func handleManagementRequest(store *PluginState, req pluginapi.ManagementRequest
 	case method == http.MethodPost && path == "/refresh/account":
 		return handleRefreshAccountRequest(store, req, now)
 	case method == http.MethodGet && path == "/logs":
-		return jsonManagementResponse(http.StatusOK, map[string]any{"logs": store.Snapshot(now).Logs})
+		configCommitMu.RLock()
+		response := jsonManagementResponse(http.StatusOK, map[string]any{"logs": store.Snapshot(now).Logs})
+		configCommitMu.RUnlock()
+		return response
 	case method == http.MethodGet && path == "/export":
 		return handleExportState(store, now)
 	case method == http.MethodPost && path == "/import":
 		return handleImportState(store, req.Body, now)
 	case method == http.MethodGet && path == "/annotations":
-		return jsonManagementResponse(http.StatusOK, store.Annotations())
+		configCommitMu.RLock()
+		response := jsonManagementResponse(http.StatusOK, store.Annotations())
+		configCommitMu.RUnlock()
+		return response
 	case method == http.MethodPut && path == "/annotations":
 		return handlePutAnnotations(store, req)
 	case method == http.MethodPatch && path == "/annotations/account":
@@ -446,25 +459,31 @@ func handlePutSettings(store *PluginState, req pluginapi.ManagementRequest, now 
 }
 
 func saveSettingsPayload(store *PluginState, payload SettingsPayload) pluginapi.ManagementResponse {
+	configCommitMu.Lock()
+	response, riskChanged, riskEnabled := saveSettingsPayloadLocked(store, payload)
+	configCommitMu.Unlock()
+	if riskChanged {
+		managementProvisionalRiskChanged(riskEnabled)
+	}
+	return response
+}
+
+func saveSettingsPayloadLocked(store *PluginState, payload SettingsPayload) (pluginapi.ManagementResponse, bool, bool) {
 	previousRisk := store.Config().ProbeOnProvisionalRoster
 	cfg, err := ConfigFromSettings(store.Config(), payload)
 	if err != nil {
-		return jsonManagementResponse(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return jsonManagementResponse(http.StatusBadRequest, map[string]string{"error": err.Error()}), false, false
 	}
 	disk := diskStateFromStore(store)
 	disk.Config = cfg
 	if err := SaveUserData(semanticStatePaths(defaultStatePath()).UserData, disk); err != nil {
-		return jsonManagementResponse(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return jsonManagementResponse(http.StatusInternalServerError, map[string]string{"error": err.Error()}), false, false
 	}
 	if err := store.ReplaceConfig(cfg); err != nil {
-		return jsonManagementResponse(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return jsonManagementResponse(http.StatusBadRequest, map[string]string{"error": err.Error()}), false, false
 	}
-	currentConfig.Store(cloneConfig(cfg))
 	republishSchedulerConfig(store, time.Now())
-	if cfg.ProbeOnProvisionalRoster != previousRisk {
-		managementProvisionalRiskChanged(cfg.ProbeOnProvisionalRoster)
-	}
-	return jsonManagementResponse(http.StatusOK, SettingsFromConfig(cfg))
+	return jsonManagementResponse(http.StatusOK, SettingsFromConfig(cfg)), cfg.ProbeOnProvisionalRoster != previousRisk, cfg.ProbeOnProvisionalRoster
 }
 
 type refreshAccountPayload struct {
@@ -494,12 +513,16 @@ func handleRefreshAccountRequest(store *PluginState, req pluginapi.ManagementReq
 }
 
 func handleExportState(store *PluginState, now time.Time) pluginapi.ManagementResponse {
+	configCommitMu.RLock()
+	defer configCommitMu.RUnlock()
 	state := diskStateFromStore(store)
 	store.RecordLog("info", "ui.config_exported", "页面导出插件配置", nil, now)
 	return jsonManagementResponse(http.StatusOK, normalizePluginDiskState(state))
 }
 
 func handleImportState(store *PluginState, body []byte, now time.Time) pluginapi.ManagementResponse {
+	configCommitMu.Lock()
+	defer configCommitMu.Unlock()
 	raw := strings.TrimSpace(string(body))
 	if raw == "" {
 		return jsonManagementResponse(http.StatusBadRequest, map[string]string{"error": "data is required"})
@@ -520,22 +543,18 @@ func handleImportState(store *PluginState, body []byte, now time.Time) pluginapi
 	if err := SaveUserData(semanticStatePaths(defaultStatePath()).UserData, state); err != nil {
 		return jsonManagementResponse(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
-	if err := store.ReplaceConfig(state.Config); err != nil {
+	if err := store.ReplaceConfigAndAnnotations(state.Config, AnnotationState{Accounts: state.Accounts, Groups: state.Groups}); err != nil {
 		return jsonManagementResponse(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
-	currentConfig.Store(cloneConfig(state.Config))
-	store.SetAnnotations(AnnotationState{Accounts: state.Accounts, Groups: state.Groups})
 	republishSchedulerConfig(store, now)
 	store.RecordLog("info", "ui.config_imported", "页面导入插件配置", nil, now)
 	return jsonManagementResponse(http.StatusOK, map[string]bool{"ok": true})
 }
 
 func republishSchedulerConfig(store *PluginState, now time.Time) {
-	var active map[string]struct{}
-	if current := publishedSchedulerSnapshot.Load(); current != nil {
-		active = current.ActiveHighestTier
-	}
-	publishSchedulerState(store, active, now)
+	schedulerStatePublicationMu.Lock()
+	defer schedulerStatePublicationMu.Unlock()
+	publishSchedulerStateLocked(store, nil, now)
 }
 
 func BuildStatusPayload(snapshot StateSnapshot, ordered []ScheduledAccount) StatusPayload {
@@ -551,21 +570,22 @@ func buildStatusPayload(snapshot StateSnapshot, ordered []ScheduledAccount, life
 	}
 
 	payload := StatusPayload{
-		PluginID:              PluginID,
-		GeneratedAt:           snapshot.Now,
-		MonthlyMode:           snapshot.Config.MonthlyMode,
-		SelectionStrategy:     snapshot.Config.SelectionStrategy,
-		HandleEnabled:         snapshot.Config.HandleEnabled,
-		LastSelected:          snapshot.LastSelected,
-		LastReason:            snapshot.LastReason,
-		RefreshActive:         refreshActiveFromSnapshot(snapshot),
-		LastCodexActivityText: formatTime(snapshot.LastCodexActivityAt),
-		LastAuthScanText:      formatTime(snapshot.LastAuthScanAt),
-		CodexAuthCount:        snapshot.CodexAuthCount,
-		Settings:              SettingsFromConfig(snapshot.Config),
-		Accounts:              make([]StatusAccount, 0, len(ordered)),
-		Groups:                make([]StatusGroup, 0, len(snapshot.Annotations.Groups)),
-		Logs:                  cloneLogs(snapshot.Logs),
+		PluginID:                 PluginID,
+		GeneratedAt:              snapshot.Now,
+		MonthlyMode:              snapshot.Config.MonthlyMode,
+		SelectionStrategy:        snapshot.Config.SelectionStrategy,
+		SelectionStrategyDisplay: displaySelectionStrategy(snapshot.Config.SelectionStrategy),
+		HandleEnabled:            snapshot.Config.HandleEnabled,
+		LastSelected:             snapshot.LastSelected,
+		LastReason:               snapshot.LastReason,
+		RefreshActive:            refreshActiveFromSnapshot(snapshot),
+		LastCodexActivityText:    formatTime(snapshot.LastCodexActivityAt),
+		LastAuthScanText:         formatTime(snapshot.LastAuthScanAt),
+		CodexAuthCount:           snapshot.CodexAuthCount,
+		Settings:                 SettingsFromConfig(snapshot.Config),
+		Accounts:                 make([]StatusAccount, 0, len(ordered)),
+		Groups:                   make([]StatusGroup, 0, len(snapshot.Annotations.Groups)),
+		Logs:                     cloneLogs(snapshot.Logs),
 	}
 	if lifecycle != nil {
 		payload.Roster = rosterLifecyclePayload(*lifecycle, snapshot, snapshot.Now)
@@ -671,6 +691,7 @@ func rosterLifecyclePayload(lifecycle ManagementLifecycleSnapshot, snapshot Stat
 		AdmissionPriority: snapshot.CPAAdmission.Priority, AdmittedAuthCount: len(snapshot.CPAAdmission.AuthIDs),
 		RosterEntryCount: len(roster.Entries), RosterInstanceCount: len(roster.Instances),
 		RiskOptionEnabled: snapshot.Config.ProbeOnProvisionalRoster, RiskOptionAvailable: available,
+		LastSyncAt: optionalTime(roster.LastSyncAt), LastSyncResult: roster.LastSyncResult, LastSyncError: roster.LastSyncError,
 	}
 	switch {
 	case lifecycle.CredentialAmbiguous:
@@ -692,6 +713,14 @@ func rosterLifecyclePayload(lifecycle ManagementLifecycleSnapshot, snapshot Stat
 		payload.RiskWarning = "A fresh provisional roster is available, but Probe risk mode is disabled."
 	}
 	return payload
+}
+
+func optionalTime(value time.Time) *time.Time {
+	if value.IsZero() {
+		return nil
+	}
+	copy := value
+	return &copy
 }
 
 func refreshActiveFromSnapshot(snapshot StateSnapshot) bool {
@@ -993,12 +1022,16 @@ func sanitizePublicStatusPayload(payload StatusPayload) StatusPayload {
 }
 
 func buildCurrentStatusPayload(store *PluginState, now time.Time) StatusPayload {
+	configCommitMu.RLock()
+	defer configCommitMu.RUnlock()
 	snapshot := store.Snapshot(now)
 	ordered := buildOrderedAccounts(syntheticStatusRequest(snapshot), snapshot, now, globalTrials)
 	return BuildStatusPayload(snapshot, ordered)
 }
 
 func buildCurrentStatusPayloadWithLifecycle(store *PluginState, now time.Time, lifecycle ManagementLifecycleSnapshot) StatusPayload {
+	configCommitMu.RLock()
+	defer configCommitMu.RUnlock()
 	snapshot := store.Snapshot(now)
 	active := make(map[string]struct{}, len(lifecycle.Roster.Instances))
 	for _, authID := range lifecycle.Roster.Instances {
@@ -1060,6 +1093,8 @@ func handlePutAnnotations(store *PluginState, req pluginapi.ManagementRequest) p
 		return jsonManagementResponse(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
 	state = NormalizeAnnotationState(state)
+	configCommitMu.Lock()
+	defer configCommitMu.Unlock()
 	if err := persistAnnotationState(store, state); err != nil {
 		return jsonManagementResponse(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
@@ -1084,6 +1119,8 @@ func applyAccountAnnotationPatch(store *PluginState, patch annotationPatch) plug
 	if key == "" {
 		return jsonManagementResponse(http.StatusBadRequest, map[string]string{"error": "annotation key is required"})
 	}
+	configCommitMu.Lock()
+	defer configCommitMu.Unlock()
 
 	state := store.Annotations()
 	annotation := state.Accounts[key]
@@ -1133,6 +1170,8 @@ func applyGroupAnnotationPatch(store *PluginState, patch annotationPatch) plugin
 	if key == "" {
 		return jsonManagementResponse(http.StatusBadRequest, map[string]string{"error": "group key is required"})
 	}
+	configCommitMu.Lock()
+	defer configCommitMu.Unlock()
 
 	state := store.Annotations()
 	annotation := state.Groups[key]

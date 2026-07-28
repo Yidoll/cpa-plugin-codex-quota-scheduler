@@ -27,7 +27,7 @@ const (
 	FallbackFillFirst FallbackMode = "fill-first"
 )
 
-var pluginVersion = "0.3.0"
+var pluginVersion = "0.3.1"
 
 type MonthlyMode string
 
@@ -95,6 +95,13 @@ type rawConfig struct {
 	CircuitHalfOpenSuccessThreshold *int     `yaml:"circuit_half_open_success_threshold"`
 	MaxLogEntries                   *int     `yaml:"max_log_entries"`
 	LogRetention                    string   `yaml:"log_retention"`
+}
+
+type strategyConfigOverlay struct {
+	SelectionStrategyPresent bool
+	SelectionStrategy        SelectionStrategy
+	SubscriptionOrderPresent bool
+	SubscriptionOrder        []string
 }
 
 func DefaultConfig() Config {
@@ -203,6 +210,10 @@ func ValidateConfig(cfg Config) (Config, error) {
 }
 
 func DecodeConfig(raw []byte) (Config, error) {
+	return decodeConfig(raw, true)
+}
+
+func decodeConfig(raw []byte, validateStrategy bool) (Config, error) {
 	cfg := DefaultConfig()
 	if len(raw) == 0 {
 		return cfg, nil
@@ -338,6 +349,67 @@ func DecodeConfig(raw []byte) (Config, error) {
 			return Config{}, fmt.Errorf("log_retention must be positive")
 		}
 		cfg.LogRetention = d
+	}
+	if !validateStrategy {
+		cfg.SelectionStrategy = ""
+		cfg.SubscriptionOrder = nil
+	}
+	return ValidateConfig(cfg)
+}
+
+func decodeStrategyConfigOverlay(raw []byte) (strategyConfigOverlay, error) {
+	var document yaml.Node
+	if len(raw) == 0 {
+		return strategyConfigOverlay{}, nil
+	}
+	if err := yaml.Unmarshal(raw, &document); err != nil {
+		return strategyConfigOverlay{}, err
+	}
+	if len(document.Content) == 0 {
+		return strategyConfigOverlay{}, nil
+	}
+	root := document.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return strategyConfigOverlay{}, fmt.Errorf("plugin config must be a mapping")
+	}
+	overlay := strategyConfigOverlay{}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		key, value := root.Content[i], root.Content[i+1]
+		switch key.Value {
+		case "selection_strategy":
+			overlay.SelectionStrategyPresent = true
+			if value.Tag == "!!null" {
+				overlay.SelectionStrategy = ""
+				continue
+			}
+			var strategy string
+			if err := value.Decode(&strategy); err != nil {
+				return strategyConfigOverlay{}, fmt.Errorf("selection_strategy: %w", err)
+			}
+			overlay.SelectionStrategy = SelectionStrategy(strings.ToLower(strings.TrimSpace(strategy)))
+		case "subscription_order":
+			overlay.SubscriptionOrderPresent = true
+			if value.Tag == "!!null" {
+				overlay.SubscriptionOrder = nil
+				continue
+			}
+			var order []string
+			if err := value.Decode(&order); err != nil {
+				return strategyConfigOverlay{}, fmt.Errorf("subscription_order: %w", err)
+			}
+			overlay.SubscriptionOrder = append([]string(nil), order...)
+		}
+	}
+	return overlay, nil
+}
+
+func applyStrategyConfigOverlay(base Config, overlay strategyConfigOverlay) (Config, error) {
+	cfg := cloneConfig(base)
+	if overlay.SelectionStrategyPresent {
+		cfg.SelectionStrategy = overlay.SelectionStrategy
+	}
+	if overlay.SubscriptionOrderPresent {
+		cfg.SubscriptionOrder = append([]string(nil), overlay.SubscriptionOrder...)
 	}
 	return ValidateConfig(cfg)
 }

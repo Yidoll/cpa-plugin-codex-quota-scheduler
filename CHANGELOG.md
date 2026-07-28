@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.1
+
+- Preserve explicitly configured lifecycle strategy fields over persisted
+  Management settings while treating explicit empty values as a legacy reset.
+- Commit validated configuration, persisted user data, and scheduler snapshots
+  as one consistent update.
+- Keep the configured strategy while waiting for an authoritative roster and
+  report safe candidate, admission, ordering, and fallback diagnostics.
+- Track authoritative roster synchronization with fixed, non-sensitive result
+  and error categories.
+
 ## 0.3.0
 
 - Add quota, subscription-rank, and subscription-expiry selection strategies.

@@ -78,6 +78,27 @@ func loadUserDataWithMigration(paths SemanticStatePaths, hooks FileHooks, crash 
 	return verified, true, nil
 }
 
+func previewUserDataWithMigration(paths SemanticStatePaths) (PluginDiskState, bool, error) {
+	if _, err := os.Stat(paths.UserData); err == nil {
+		state, loaded, errRead := readUserData(paths.UserData)
+		if errRead == nil {
+			return state, loaded, nil
+		}
+		backup, backupLoaded, errBackup := readUserData(paths.UserData + ".bak")
+		if errBackup == nil {
+			return backup, backupLoaded, nil
+		}
+		return normalizePluginDiskState(PluginDiskState{Config: DefaultConfig()}), false, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return PluginDiskState{}, false, err
+	}
+	state, loaded, err := loadStrictLegacyUserData(paths.Legacy)
+	if err != nil {
+		return normalizePluginDiskState(PluginDiskState{Config: DefaultConfig()}), false, nil
+	}
+	return state, loaded, nil
+}
+
 func loadStrictLegacyUserData(path string) (PluginDiskState, bool, error) {
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {

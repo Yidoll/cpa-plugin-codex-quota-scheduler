@@ -83,6 +83,14 @@ type SelectionResult struct {
 	EvidenceSource string
 	Reason         string
 	Ordered        []AccountView
+	CandidateCount int
+	AdmittedCount  int
+	Unavailable    []SelectionUnavailable
+}
+
+type SelectionUnavailable struct {
+	AuthID string
+	Reason string
 }
 
 func ClassifyAccount(a AccountView, now time.Time) AvailabilityClass {
@@ -109,20 +117,44 @@ func SelectAccount(snapshot SchedulerSnapshot, candidates []Candidate, now time.
 }
 
 func selectAccountSkipping(snapshot SchedulerSnapshot, candidates []Candidate, now time.Time, skip map[AuthInstanceID]struct{}, trials *TrialRegistry) SelectionResult {
+	candidateIDs := make(map[string]struct{}, len(candidates))
 	eligible := make(map[string]struct{}, len(candidates))
 	for _, c := range candidates {
 		if c.ID != "" && c.Provider == "codex" {
+			candidateIDs[c.ID] = struct{}{}
 			if _, ok := snapshot.ActiveHighestTier[c.ID]; ok {
 				eligible[c.ID] = struct{}{}
 			}
 		}
 	}
+	result := SelectionResult{CandidateCount: len(candidateIDs), AdmittedCount: len(eligible)}
+	if result.CandidateCount == 0 {
+		result.Reason = "no_codex_candidates"
+		result.Fallback = snapshot.Fallback == FallbackFillFirst
+		return result
+	}
+	if len(snapshot.ActiveHighestTier) == 0 {
+		result.Reason = "waiting_roster"
+		if snapshot.AdmissionObserved {
+			result.Reason = "no_admitted_candidates"
+		}
+		result.Fallback = snapshot.Fallback == FallbackFillFirst
+		return result
+	}
+	if result.AdmittedCount == 0 {
+		result.Reason = "no_admitted_candidates"
+		result.Fallback = snapshot.Fallback == FallbackFillFirst
+		return result
+	}
 	byClass := map[AvailabilityClass][]AccountView{Preferred: {}, Opportunistic: {}}
+	seen := make(map[string]struct{}, len(eligible))
 	for _, a := range snapshot.Accounts {
-		if _, blocked := skip[a.Instance]; blocked {
+		if _, ok := eligible[a.ID]; !ok {
 			continue
 		}
-		if _, ok := eligible[a.ID]; !ok {
+		seen[a.ID] = struct{}{}
+		if _, blocked := skip[a.Instance]; blocked {
+			result.Unavailable = append(result.Unavailable, SelectionUnavailable{AuthID: a.ID, Reason: "quota_probe_wait"})
 			continue
 		}
 		if trials != nil {
@@ -132,21 +164,52 @@ func selectAccountSkipping(snapshot SchedulerSnapshot, candidates []Candidate, n
 		class := ClassifyAccount(a, now)
 		if class != Excluded {
 			byClass[class] = append(byClass[class], a)
+		} else {
+			result.Unavailable = append(result.Unavailable, SelectionUnavailable{AuthID: a.ID, Reason: selectionUnavailableReason(a, now)})
 		}
 	}
+	for authID := range eligible {
+		if _, ok := seen[authID]; !ok {
+			result.Unavailable = append(result.Unavailable, SelectionUnavailable{AuthID: authID, Reason: "unknown_account"})
+		}
+	}
+	sort.Slice(result.Unavailable, func(i, j int) bool { return result.Unavailable[i].AuthID < result.Unavailable[j].AuthID })
 	for _, class := range []AvailabilityClass{Preferred, Opportunistic} {
 		accounts := byClass[class]
 		policy := SelectionPolicy{Strategy: snapshot.SelectionStrategy, MonthlyMode: snapshot.MonthlyMode, SubscriptionRanks: snapshot.SubscriptionRanks, Now: now}
 		sort.Slice(accounts, func(i, j int) bool { return accountViewLess(accounts[i], accounts[j], policy) })
+		result.Ordered = append(result.Ordered, accounts...)
 		if len(accounts) > 0 {
-			result := SelectionResult{AuthID: accounts[0].ID, Instance: accounts[0].Instance, Class: class, Trial: class == Opportunistic, Reason: "selected", Ordered: accounts}
+			result.AuthID, result.Instance, result.Class = accounts[0].ID, accounts[0].Instance, class
+			result.Trial, result.Reason = class == Opportunistic, "selected"
 			if result.Trial {
 				result.EvidenceSource = "trial_evidence"
 			}
 			return result
 		}
 	}
-	return SelectionResult{Reason: "no_selectable_account", Fallback: snapshot.Fallback == FallbackFillFirst}
+	result.Reason = "no_selectable_account"
+	result.Fallback = snapshot.Fallback == FallbackFillFirst
+	return result
+}
+
+func selectionUnavailableReason(account AccountView, now time.Time) string {
+	switch {
+	case account.AuthBlocked:
+		return "auth_failure"
+	case account.Circuit == CircuitOpen:
+		return "circuit_open"
+	case account.TemporaryUnavailable:
+		return "temporary_unavailable"
+	case account.Trial != TrialNone:
+		return "quota_probe_wait"
+	case account.Exhausted && account.ResetAt.After(now):
+		return "quota_exhausted"
+	case account.Cache == CacheStale && !account.LastKnownAvailable:
+		return "stale_quota"
+	default:
+		return "unavailable"
+	}
 }
 
 type SelectionPolicy struct {

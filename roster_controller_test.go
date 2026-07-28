@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -350,12 +351,137 @@ func TestStartupCapabilityBRecoversThroughRosterSynchronization(t *testing.T) {
 	}
 }
 
+func TestRosterSyncDiagnosticsClassifyFailureAndClearOnRecovery(t *testing.T) {
+	priority := 4
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	host := &rosterTestHost{err: errors.New("Authorization: SECRET")}
+	controller := NewRosterController(RosterControllerOptions{Host: host, Now: func() time.Time { return now }})
+
+	failed, err := controller.Startup(context.Background())
+	if err == nil || failed.LastSyncResult != RosterSyncFailed || failed.LastSyncError != RosterSyncErrorHostCall || !failed.LastSyncAt.Equal(now) {
+		t.Fatalf("failed sync diagnostics = %#v err=%v", failed, err)
+	}
+
+	now = now.Add(time.Minute)
+	host.update([]RosterEntry{{ID: "other", Provider: "openai", Priority: &priority}}, nil, nil)
+	noTier, err := controller.WakeForManagement(context.Background())
+	if err == nil || noTier.LastSyncResult != RosterSyncFailed || noTier.LastSyncError != RosterSyncErrorNoCodexTier || !noTier.LastSyncAt.Equal(now) {
+		t.Fatalf("no-tier diagnostics = %#v err=%v", noTier, err)
+	}
+
+	now = now.Add(time.Minute)
+	host.update([]RosterEntry{{ID: "codex-a", Provider: "codex", Priority: &priority}}, nil, nil)
+	recovered, err := controller.WakeForManagement(context.Background())
+	if err != nil || recovered.LastSyncResult != RosterSyncSucceeded || recovered.LastSyncError != "" || !recovered.LastSyncAt.Equal(now) {
+		t.Fatalf("recovered diagnostics = %#v err=%v", recovered, err)
+	}
+}
+
+func TestRosterSyncDiagnosticsClassifyMissingHost(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	controller := NewRosterController(RosterControllerOptions{Now: func() time.Time { return now }})
+	got, err := controller.Startup(context.Background())
+	if err == nil || got.LastSyncError != RosterSyncErrorHostUnavailable || got.LastSyncResult != RosterSyncFailed {
+		t.Fatalf("missing-host diagnostics = %#v err=%v", got, err)
+	}
+}
+
+func TestRosterSyncDiagnosticsClassifyPublishFailureAndExposeSafeStatus(t *testing.T) {
+	priority := 4
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	host := &rosterTestHost{entries: []RosterEntry{{ID: "codex-a", Provider: "codex", Priority: &priority}}}
+	failPublish := true
+	controller := NewRosterController(RosterControllerOptions{
+		Host: host,
+		Now:  func() time.Time { return now },
+		Publish: func(context.Context, ActiveRoster) (ActiveRoster, error) {
+			if failPublish {
+				return ActiveRoster{}, errors.New("Authorization: SECRET")
+			}
+			return ActiveRoster{}, nil
+		},
+	})
+
+	failed, err := controller.Startup(context.Background())
+	if err == nil || failed.LastSyncResult != RosterSyncFailed || failed.LastSyncError != RosterSyncErrorPublish {
+		t.Fatalf("publish failure diagnostics = %#v err=%v", failed, err)
+	}
+	payload := rosterLifecyclePayload(ManagementLifecycleSnapshot{Roster: failed}, NewPluginState(DefaultConfig()).Snapshot(now), now)
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, want := range []string{`"last_sync_result":"failed"`, `"last_sync_error_category":"publish_failed"`, `"last_sync_at":"2026-07-28T12:00:00Z"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("status missing %s: %s", want, text)
+		}
+	}
+	if strings.Contains(text, "SECRET") || strings.Contains(text, "Authorization") {
+		t.Fatalf("status leaked publish error: %s", text)
+	}
+
+	failPublish = false
+	now = now.Add(time.Minute)
+	recovered, err := controller.WakeForManagement(context.Background())
+	if err != nil || recovered.LastSyncResult != RosterSyncSucceeded || recovered.LastSyncError != "" {
+		t.Fatalf("publish recovery diagnostics = %#v err=%v", recovered, err)
+	}
+}
+
 func TestRosterCandidatesHaveNoRosterSideEffects(t *testing.T) {
 	host := &rosterTestHost{err: errors.New("unavailable")}
 	c := NewRosterController(RosterControllerOptions{Host: host, Candidates: func() []string { return []string{"candidate-only"} }})
 	got, _ := c.Startup(context.Background())
 	if len(got.Instances) != 0 || got.Confirmed {
 		t.Fatalf("candidate became roster: %#v", got)
+	}
+}
+
+func TestWaitingRosterRecoveryUsesPreviouslyLoadedStrategy(t *testing.T) {
+	priority := 4
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	cfg := DefaultConfig()
+	cfg.SelectionStrategy = SelectionStrategyQuotaLow
+	lowUsed, highUsed := 10.0, 80.0
+	store := NewPluginState(cfg)
+	store.UpsertQuota(AccountState{AuthID: "more", Instance: 1, Family: AccountFamilyWeekly, LastSuccessAt: now, Quota: ParsedQuota{LongWindow: &QuotaWindow{UsedPercent: &lowUsed, ResetAt: now.Add(time.Hour)}}})
+	store.UpsertQuota(AccountState{AuthID: "less", Instance: 2, Family: AccountFamilyWeekly, LastSuccessAt: now, Quota: ParsedQuota{LongWindow: &QuotaWindow{UsedPercent: &highUsed, ResetAt: now.Add(time.Hour)}}})
+	previousSnapshot := publishedSchedulerSnapshot.Load()
+	t.Cleanup(func() { publishedSchedulerSnapshot.Store(previousSnapshot) })
+	publishSchedulerState(store, nil, now)
+
+	host := &rosterTestHost{err: errors.New("not ready")}
+	controller := NewRosterController(RosterControllerOptions{
+		Host: host,
+		Now:  func() time.Time { return now },
+		Publish: func(_ context.Context, active ActiveRoster) (ActiveRoster, error) {
+			ids := make(map[string]struct{}, len(active.Instances))
+			for _, authID := range active.Instances {
+				ids[authID] = struct{}{}
+			}
+			store.ReplaceCPAAdmission(CPAAdmissionState{Observed: true, Priority: active.HighestPriority, AuthIDs: ids})
+			publishSchedulerState(store, ids, now)
+			return active, nil
+		},
+	})
+	if _, err := controller.Startup(context.Background()); err == nil {
+		t.Fatal("startup unexpectedly confirmed roster")
+	}
+	req := pluginapi.SchedulerPickRequest{Provider: "codex", Candidates: []pluginapi.SchedulerAuthCandidate{{ID: "more", Provider: "codex"}, {ID: "less", Provider: "codex"}}}
+	before := schedulerPickPublished(req, now)
+	if before.Reason != "waiting_roster" || before.Strategy != SelectionStrategyQuotaLow || before.AuthID != "" {
+		t.Fatalf("waiting decision = %#v", before)
+	}
+
+	now = now.Add(time.Minute)
+	host.update([]RosterEntry{{ID: "more", Provider: "codex", Priority: &priority}, {ID: "less", Provider: "codex", Priority: &priority}}, nil, nil)
+	if _, err := controller.WakeForManagement(context.Background()); err != nil {
+		t.Fatalf("roster recovery: %v", err)
+	}
+	after := schedulerPickPublished(req, now)
+	if after.AuthID != "less" || after.Strategy != SelectionStrategyQuotaLow {
+		t.Fatalf("recovered decision = %#v, want quota_low select less", after)
 	}
 }
 
