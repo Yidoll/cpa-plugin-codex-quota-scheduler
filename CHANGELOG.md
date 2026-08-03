@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+- Negotiate the host-advertised `emergency-provider-fill-first` Scheduler
+  delegate while preserving ordinary `fill-first` on older hosts.
+- Use `fallback: fill-first` as the master switch for the global emergency pool
+  of enabled Codex API and OpenAI-compatible Providers after all authoritative
+  OAuth accounts are unavailable.
+- Keep OAuth ahead of every Provider priority and preserve deterministic
+  Provider priority/Auth ID ordering, retry, SSE, and required WebSocket
+  behavior.
+- Add bilingual Management guidance, capability status, latest safe emergency
+  result, aggregate diagnostics, and credential-leak regression tests.
+
+### Compatibility and rollout
+
+| Host | Plugin | Behavior |
+| --- | --- | --- |
+| New | Old | Existing OAuth and ordinary `fill-first` behavior is unchanged. |
+| Old | New | The missing capability keeps ordinary `fill-first` and records `emergency_delegate_unsupported`. |
+| New | New | OAuth remains preferred; the restricted global Provider exit is enabled by `fallback: fill-first`. |
+| Old | Old | Existing behavior is unchanged. |
+
+Release and deploy CLIProxyAPI first, then remove the development `replace`
+directive and pin this plugin to the formal SDK release containing the new
+delegate. Roll back in reverse order: plugin first, host second.
+
 ## 0.4.0
 
 - Filter disabled, unavailable, non-Codex, empty-ID, and empty-auth-index Host

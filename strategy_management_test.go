@@ -172,7 +172,7 @@ func TestStrategyCommitHidesPartialStateFromManagementAndPick(t *testing.T) {
 		publishedSchedulerSnapshot.Store(previousSnapshot)
 	})
 
-	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	lowUsed, highUsed := 10.0, 80.0
 	store := NewPluginState(DefaultConfig())
 	store.UpsertQuota(AccountState{AuthID: "more", Instance: 1, Family: AccountFamilyWeekly, PlanType: "plus", LastSuccessAt: now, Quota: ParsedQuota{LongWindow: &QuotaWindow{UsedPercent: &lowUsed, ResetAt: now.Add(time.Hour)}}})

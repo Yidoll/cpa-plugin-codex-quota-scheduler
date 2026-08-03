@@ -77,8 +77,9 @@ func schedulerPickPublished(req pluginapi.SchedulerPickRequest, now time.Time) P
 	if !requestIncludesCodex(req) {
 		return PickDecision{Reason: "provider_not_codex", Strategy: snapshot.SelectionStrategy, StrategyValue: "unknown", CandidateCount: codexCandidateCount(req)}
 	}
+	hostSupportsEmergencyDelegate := schedulerSupportsBuiltinDelegate(req.Options, pluginapi.SchedulerBuiltinEmergencyProviderFillFirst)
 	if !snapshot.HandleEnabled {
-		return observeSchedulerDecision(snapshot, req, PickDecision{Reason: "handle_disabled", Strategy: snapshot.SelectionStrategy, StrategyValue: "unknown", CandidateCount: codexCandidateCount(req)}, now)
+		return observeSchedulerDecision(snapshot, req, PickDecision{Reason: "handle_disabled", Strategy: snapshot.SelectionStrategy, StrategyValue: "unknown", CandidateCount: codexCandidateCount(req), HostSupportsEmergencyDelegate: hostSupportsEmergencyDelegate}, now)
 	}
 	if snapshot.Activity != nil {
 		snapshot.Activity(req, snapshot.AdmissionVersion, now)
@@ -105,12 +106,59 @@ func schedulerPickPublished(req pluginapi.SchedulerPickRequest, now time.Time) P
 	}
 	if result.AuthID != "" {
 		known, value := strategySortValue(result.Ordered[0], SelectionPolicy{Strategy: snapshot.SelectionStrategy, MonthlyMode: snapshot.MonthlyMode, SubscriptionRanks: snapshot.SubscriptionRanks, Now: now})
-		return observeSchedulerDecision(snapshot, req, selectionPickDecision(snapshot, result, PickDecision{AuthID: result.AuthID, Handled: true, Reason: "selected", StrategyKnown: known, StrategyValue: value}), now)
+		return observeSchedulerDecision(snapshot, req, selectionPickDecision(snapshot, result, PickDecision{AuthID: result.AuthID, Handled: true, Reason: "selected", StrategyKnown: known, StrategyValue: value, HostSupportsEmergencyDelegate: hostSupportsEmergencyDelegate}), now)
 	}
 	if snapshot.Fallback == FallbackFillFirst {
-		return observeSchedulerDecision(snapshot, req, selectionPickDecision(snapshot, result, PickDecision{Handled: true, DelegateBuiltin: pluginapi.SchedulerBuiltinFillFirst, Reason: result.Reason}), now)
+		delegate := pluginapi.SchedulerBuiltinFillFirst
+		compatibilityReason := ""
+		activePoolBypassed := false
+		if !schedulerRequestHasPinnedAuth(req) {
+			if hostSupportsEmergencyDelegate {
+				delegate = pluginapi.SchedulerBuiltinEmergencyProviderFillFirst
+				activePoolBypassed = true
+			} else {
+				compatibilityReason = "emergency_delegate_unsupported"
+			}
+		}
+		return observeSchedulerDecision(snapshot, req, selectionPickDecision(snapshot, result, PickDecision{
+			Handled:                       true,
+			DelegateBuiltin:               delegate,
+			Reason:                        result.Reason,
+			CompatibilityReason:           compatibilityReason,
+			HostSupportsEmergencyDelegate: hostSupportsEmergencyDelegate,
+			OAuthStageReason:              result.Reason,
+			ActivePoolBypassed:            activePoolBypassed,
+		}), now)
 	}
-	return observeSchedulerDecision(snapshot, req, selectionPickDecision(snapshot, result, PickDecision{Reason: result.Reason}), now)
+	return observeSchedulerDecision(snapshot, req, selectionPickDecision(snapshot, result, PickDecision{Reason: result.Reason, HostSupportsEmergencyDelegate: hostSupportsEmergencyDelegate}), now)
+}
+
+func schedulerSupportsBuiltinDelegate(options pluginapi.SchedulerOptions, delegate string) bool {
+	delegate = strings.TrimSpace(delegate)
+	if delegate == "" {
+		return false
+	}
+	for _, supported := range options.SupportedBuiltinDelegates {
+		if strings.TrimSpace(supported) == delegate {
+			return true
+		}
+	}
+	return false
+}
+
+func schedulerRequestHasPinnedAuth(req pluginapi.SchedulerPickRequest) bool {
+	if len(req.Options.Metadata) == 0 {
+		return false
+	}
+	raw := req.Options.Metadata["pinned_auth_id"]
+	switch value := raw.(type) {
+	case string:
+		return strings.TrimSpace(value) != ""
+	case []byte:
+		return strings.TrimSpace(string(value)) != ""
+	default:
+		return false
+	}
 }
 
 func selectionPickDecision(snapshot *SchedulerSnapshot, result SelectionResult, decision PickDecision) PickDecision {

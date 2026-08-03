@@ -8,20 +8,24 @@ import (
 )
 
 type PickDecision struct {
-	AuthID               string
-	Handled              bool
-	DelegateBuiltin      string
-	Reason               string
-	Ordered              []ScheduledAccount
-	Strategy             SelectionStrategy
-	StrategyKnown        bool
-	StrategyValue        string
-	CandidateCount       int
-	AdmittedCount        int
-	OrderedCount         int
-	ActiveSelectionCount int
-	PlanFilterContext    string
-	UnavailableSummary   string
+	AuthID                        string
+	Handled                       bool
+	DelegateBuiltin               string
+	Reason                        string
+	Ordered                       []ScheduledAccount
+	Strategy                      SelectionStrategy
+	StrategyKnown                 bool
+	StrategyValue                 string
+	CandidateCount                int
+	AdmittedCount                 int
+	OrderedCount                  int
+	ActiveSelectionCount          int
+	PlanFilterContext             string
+	UnavailableSummary            string
+	CompatibilityReason           string
+	HostSupportsEmergencyDelegate bool
+	OAuthStageReason              string
+	ActivePoolBypassed            bool
 }
 
 type ScheduledAccount struct {

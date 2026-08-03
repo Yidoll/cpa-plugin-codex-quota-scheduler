@@ -22,28 +22,30 @@ var managementRefreshOneSoon = func(authID string) {}
 var managementProvisionalRiskChanged = func(bool) {}
 
 type StatusPayload struct {
-	PluginID                 string                 `json:"plugin_id"`
-	GeneratedAt              time.Time              `json:"generated_at"`
-	Shell                    bool                   `json:"shell,omitempty"`
-	NextAuthID               string                 `json:"next_auth_id"`
-	MonthlyMode              MonthlyMode            `json:"monthly_mode"`
-	SelectionStrategy        SelectionStrategy      `json:"selection_strategy"`
-	SelectionStrategyDisplay string                 `json:"selection_strategy_display"`
-	HandleEnabled            bool                   `json:"handle_enabled"`
-	ExcludeFreeAccounts      bool                   `json:"exclude_free_accounts"`
-	LastSelected             string                 `json:"last_selected"`
-	LastReason               string                 `json:"last_reason"`
-	RefreshActive            bool                   `json:"refresh_active"`
-	RefreshState             string                 `json:"refresh_state"`
-	LastCodexActivityText    string                 `json:"last_codex_activity_text,omitempty"`
-	LastAuthScanText         string                 `json:"last_auth_scan_text,omitempty"`
-	CodexAuthCount           int                    `json:"codex_auth_count"`
-	Roster                   RosterLifecyclePayload `json:"roster"`
-	EmptyState               EmptyStatePayload      `json:"empty_state,omitempty"`
-	Settings                 SettingsPayload        `json:"settings"`
-	Accounts                 []StatusAccount        `json:"accounts"`
-	Groups                   []StatusGroup          `json:"groups,omitempty"`
-	Logs                     []LogEntry             `json:"logs"`
+	PluginID                      string                   `json:"plugin_id"`
+	GeneratedAt                   time.Time                `json:"generated_at"`
+	Shell                         bool                     `json:"shell,omitempty"`
+	NextAuthID                    string                   `json:"next_auth_id"`
+	MonthlyMode                   MonthlyMode              `json:"monthly_mode"`
+	SelectionStrategy             SelectionStrategy        `json:"selection_strategy"`
+	SelectionStrategyDisplay      string                   `json:"selection_strategy_display"`
+	HandleEnabled                 bool                     `json:"handle_enabled"`
+	ExcludeFreeAccounts           bool                     `json:"exclude_free_accounts"`
+	LastSelected                  string                   `json:"last_selected"`
+	LastReason                    string                   `json:"last_reason"`
+	RefreshActive                 bool                     `json:"refresh_active"`
+	RefreshState                  string                   `json:"refresh_state"`
+	LastCodexActivityText         string                   `json:"last_codex_activity_text,omitempty"`
+	LastAuthScanText              string                   `json:"last_auth_scan_text,omitempty"`
+	CodexAuthCount                int                      `json:"codex_auth_count"`
+	HostSupportsEmergencyDelegate bool                     `json:"host_supports_emergency_delegate"`
+	LastEmergencyResult           *EmergencyDecisionStatus `json:"last_emergency_result,omitempty"`
+	Roster                        RosterLifecyclePayload   `json:"roster"`
+	EmptyState                    EmptyStatePayload        `json:"empty_state,omitempty"`
+	Settings                      SettingsPayload          `json:"settings"`
+	Accounts                      []StatusAccount          `json:"accounts"`
+	Groups                        []StatusGroup            `json:"groups,omitempty"`
+	Logs                          []LogEntry               `json:"logs"`
 }
 
 type ManagementLifecycleSnapshot struct {
@@ -598,23 +600,28 @@ func buildStatusPayload(snapshot StateSnapshot, ordered []ScheduledAccount, life
 	}
 
 	payload := StatusPayload{
-		PluginID:                 PluginID,
-		GeneratedAt:              snapshot.Now,
-		MonthlyMode:              snapshot.Config.MonthlyMode,
-		SelectionStrategy:        snapshot.Config.SelectionStrategy,
-		SelectionStrategyDisplay: displaySelectionStrategy(snapshot.Config.SelectionStrategy),
-		HandleEnabled:            snapshot.Config.HandleEnabled,
-		ExcludeFreeAccounts:      snapshot.Config.ExcludeFreeAccounts,
-		LastSelected:             snapshot.LastSelected,
-		LastReason:               snapshot.LastReason,
-		RefreshActive:            refreshActiveFromSnapshot(snapshot),
-		LastCodexActivityText:    formatTime(snapshot.LastCodexActivityAt),
-		LastAuthScanText:         formatTime(snapshot.LastAuthScanAt),
-		CodexAuthCount:           snapshot.CodexAuthCount,
-		Settings:                 SettingsFromConfig(snapshot.Config),
-		Accounts:                 make([]StatusAccount, 0, len(ordered)),
-		Groups:                   make([]StatusGroup, 0, len(snapshot.Annotations.Groups)),
-		Logs:                     cloneLogs(snapshot.Logs),
+		PluginID:                      PluginID,
+		GeneratedAt:                   snapshot.Now,
+		MonthlyMode:                   snapshot.Config.MonthlyMode,
+		SelectionStrategy:             snapshot.Config.SelectionStrategy,
+		SelectionStrategyDisplay:      displaySelectionStrategy(snapshot.Config.SelectionStrategy),
+		HandleEnabled:                 snapshot.Config.HandleEnabled,
+		ExcludeFreeAccounts:           snapshot.Config.ExcludeFreeAccounts,
+		LastSelected:                  snapshot.LastSelected,
+		LastReason:                    snapshot.LastReason,
+		RefreshActive:                 refreshActiveFromSnapshot(snapshot),
+		LastCodexActivityText:         formatTime(snapshot.LastCodexActivityAt),
+		LastAuthScanText:              formatTime(snapshot.LastAuthScanAt),
+		CodexAuthCount:                snapshot.CodexAuthCount,
+		HostSupportsEmergencyDelegate: snapshot.HostSupportsEmergencyDelegate,
+		Settings:                      SettingsFromConfig(snapshot.Config),
+		Accounts:                      make([]StatusAccount, 0, len(ordered)),
+		Groups:                        make([]StatusGroup, 0, len(snapshot.Annotations.Groups)),
+		Logs:                          cloneLogs(snapshot.Logs),
+	}
+	if snapshot.LastEmergencyDecision.Observed {
+		lastEmergencyResult := snapshot.LastEmergencyDecision
+		payload.LastEmergencyResult = &lastEmergencyResult
 	}
 	if lifecycle != nil {
 		payload.Roster = rosterLifecyclePayload(*lifecycle, snapshot, snapshot.Now)
@@ -1400,6 +1407,7 @@ var statusTemplateV2 = template.Must(template.New("status-v2").Funcs(template.Fu
 <div class="warning" id="resetProbeWarning" hidden><strong data-i18n="resetProbe.warningTitle">自动激活新的额度周期默认关闭</strong><span data-i18n="resetProbe.warningBody">开启后，调度器会在额度重置时间已到但新周期尚未生成时，发送一次极小的 Codex 请求尝试激活新周期。</span></div>
 <details class="section collapsible" id="settingsPanel" hidden><summary><span class="summary-toggle" aria-hidden="true">&gt;</span><span class="summary-text"><span class="summary-title" data-i18n="settings.title">调度设置</span><span class="summary-subtitle" data-i18n="settings.summary">默认配置已经都设置好了，正常情况下不需要手动设置。</span></span></summary><div class="collapsible-body">
 <label class="toggle"><span data-i18n="settings.handleEnabled">启用调度接管</span><input id="handleEnabled" type="checkbox"></label>
+<p class="setting-help" data-i18n="settings.emergencyFallbackHelp">fallback: fill-first 同时启用全局应急 Provider 出口：OAuth 全部不可选时可跨越 OAuth priority 和严格活动池使用已启用的 Codex API 或 OpenAI 兼容 Provider；将 fallback 清空即可恢复明确失败。此语义没有独立开关。</p>
 <div class="setting-with-help"><label class="toggle"><span data-i18n="settings.excludeFreeAccounts">默认排除 Free 账号</span><input id="excludeFreeAccounts" name="exclude_free_accounts" type="checkbox"></label><p class="setting-help" data-i18n="settings.excludeFreeAccountsHelp">未知计划不由插件主动选择；全部合格请求候选均为已知 Free 时，本次放宽过滤并正常主动选择。</p></div>
 <label class="toggle"><span data-i18n="settings.usageFeedback">失败反馈标记额度耗尽</span><input id="usageFeedback" type="checkbox"></label>
 <div class="setting-with-help"><label class="toggle"><span data-i18n="settings.enableResetProbe">自动激活新的额度周期</span><input id="enableResetProbe" name="enable_reset_probe" type="checkbox"></label><p class="setting-help" data-i18n="settings.enableResetProbeHelp">当额度重置时间已经到达，但 OpenAI 尚未生成新的额度周期时，发送一次极小的 Codex 请求尝试激活新周期，然后重新读取额度确认结果。可能消耗少量额度。</p></div>
@@ -1425,7 +1433,7 @@ var statusTemplateV2 = template.Must(template.New("status-v2").Funcs(template.Fu
 </aside>
 <main class="main" id="protectedMain" hidden>
 <div class="warning" id="rosterLifecycleWarning" hidden><strong id="rosterLifecycleTitle">Roster lifecycle</strong><span id="rosterLifecycleBody"></span></div>
-<div class="toolbar"><div><h2 data-i18n="queue.title">账号队列</h2><p data-i18n="queue.description">账号卡片按当前调度优先级排序。第一个可用账号就是下一次 Codex 请求会优先选择的账号。</p></div><div class="metrics"><span class="metric"><span data-i18n="metrics.nextAccount">下一账号</span>：<code id="metricNextAuthID">{{if .NextAuthID}}{{.NextAuthID}}{{else}}暂无{{end}}</code></span><span class="metric">Strategy：<code id="metricSelectionStrategy">{{if .SelectionStrategy}}{{.SelectionStrategy}}{{else}}legacy{{end}}</code></span><span class="metric">Monthly：<code id="metricMonthlyMode">{{if eq .MonthlyMode "priority"}}优先使用{{else}}按到期时间{{end}}</code></span><span class="metric"><span data-i18n="metrics.lastSelected">最近选择</span>：<code id="metricLastSelected">{{if .LastSelected}}{{.LastSelected}}{{else}}暂无{{end}}</code></span></div></div>
+<div class="toolbar"><div><h2 data-i18n="queue.title">账号队列</h2><p data-i18n="queue.description">账号卡片按当前调度优先级排序。第一个可用账号就是下一次 Codex 请求会优先选择的账号。</p></div><div class="metrics"><span class="metric"><span data-i18n="metrics.nextAccount">下一账号</span>：<code id="metricNextAuthID">{{if .NextAuthID}}{{.NextAuthID}}{{else}}暂无{{end}}</code></span><span class="metric">Strategy：<code id="metricSelectionStrategy">{{if .SelectionStrategy}}{{.SelectionStrategy}}{{else}}legacy{{end}}</code></span><span class="metric">Monthly：<code id="metricMonthlyMode">{{if eq .MonthlyMode "priority"}}优先使用{{else}}按到期时间{{end}}</code></span><span class="metric"><span data-i18n="metrics.lastSelected">最近选择</span>：<code id="metricLastSelected">{{if .LastSelected}}{{.LastSelected}}{{else}}暂无{{end}}</code></span><span class="metric"><span data-i18n="metrics.emergencyFallback">全局应急 Provider 出口</span>：<code id="metricEmergencyFallback">暂无</code></span></div></div>
 <section class="queue" aria-label="账号卡片">{{range .Accounts}}<article class="card {{if and $.NextAuthID (eq $.NextAuthID .AuthID)}}next{{end}}" data-auth-id="{{.AuthID}}">
 <div class="cardTop"><div class="identity"><div class="titleLine"><span class="title">{{if .Alias}}{{.Alias}}{{else}}{{.AuthID}}{{end}}</span>{{if .Group}}<span class="groupPill">{{.Group}}</span>{{end}}</div><div class="sub"><code>{{.AuthID}}</code></div>{{if .Tags}}<div class="metaLine">{{range .Tags}}<span class="chip">{{.}}</span>{{end}}</div>{{end}}</div><span class="rank">#{{.Rank}}</span></div>
 <div class="badges">{{if and $.NextAuthID (eq $.NextAuthID .AuthID)}}<span class="badge next">下一优先</span>{{end}}{{if .Available}}<span class="badge ok">可用</span>{{else}}<span class="badge no">{{.UnavailableReason}}</span>{{end}}<span class="badge">{{if eq .Family "weekly"}}Weekly{{else if eq .Family "monthly"}}Monthly{{else}}未知类型{{end}}</span><span class="badge">订阅：{{if .PlanType}}{{.PlanType}}{{if .SubscriptionRank}} (rank {{.SubscriptionRank}}){{end}}{{else}}未知{{end}}</span><span class="badge">CPA 优先级 {{.CPAPriority}}</span><span class="badge">插件优先级 {{.SchedulerPriority}}</span><span class="badge">主动选择资格：{{.ActiveSelectionEligibility}}</span><span class="badge">熔断：{{.Circuit.Label}}</span></div>
@@ -1446,9 +1454,9 @@ const TRANSLATIONS={
   en:{
     'app.title':'Codex Quota Scheduler','app.subtitle':'Optimized Fill First scheduling. Configuration, aliases, groups, tags, and notes are saved in the plugin state file.','app.language':'Language','connection.managementKey':'CPA management key','connection.backgroundHint':'Once the scheduler is enabled, it runs in the background. This page does not need to stay open.',
     'resetProbe.warningTitle':'Automatic reset probe is off by default','resetProbe.warningBody':'Only after you check the box will the scheduler send one tiny Codex request when a reset looks lazy, nudging the next quota window to start.',
-'settings.title':'Scheduler Settings','settings.summary':'Default configuration is ready; normally no manual changes are needed.','settings.handleEnabled':'Enable scheduler takeover','settings.excludeFreeAccounts':'Exclude free accounts by default','settings.excludeFreeAccountsHelp':'Unknown plans are not actively selected. When all eligible request candidates are known Free, relax the filter and actively select as usual.','settings.usageFeedback':'Mark quota exhausted from failure feedback','settings.enableResetProbe':'Enable automatic reset probe','settings.enableResetProbeHelp':'When the quota reset time has arrived but OpenAI has not yet generated a new quota cycle, send one tiny Codex request to try to activate it, then read the quota again to confirm the result. This may consume a small amount of quota.','settings.provisionalProbe':'Allow quota probes when the account roster is unconfirmed (high risk)','settings.provisionalProbeHelp':'When CPA temporarily cannot confirm the current accounts and priorities, allow the plugin to use the most recently saved account roster for quota reset probes. Account credentials are revalidated every time, but the plugin still cannot guarantee that accounts have not been removed or reprioritized. This should normally remain off.','settings.monthlyMode':'Monthly mode','settings.expiryOrder':'Sort by expiry time','settings.monthlyPriority':'Prefer Monthly','settings.selectionStrategy':'Selection strategy','settings.strategyLegacy':'Legacy compatible order','settings.selectionStrategyHelp':'The strategy applies only after availability class and plugin priority. Unknown values sort after known values.','settings.subscriptionOrder':'Subscription order','settings.subscriptionOrderHelp':'Enter plans from low to high, separated by commas or new lines. Subscription strategies require a non-empty list without duplicates.','settings.refreshInterval':'Quota refresh interval','settings.staleAfter':'Stale cache threshold','settings.refreshActiveWindow':'Refresh active window','settings.refreshAfterResetDelay':'Refresh after reset delay','settings.refreshRetryDelays':'Refresh retry delays','settings.refreshOnStartup':'Refresh on startup','settings.maxConcurrency':'Max refresh concurrency','settings.circuitFailureThreshold':'Circuit failure threshold','settings.circuitOpenDuration':'Circuit open duration','settings.circuitHalfOpenSuccessThreshold':'Half-open recovery successes','settings.maxLogEntries':'Max log entries','settings.logRetention':'Log retention',
+'settings.title':'Scheduler Settings','settings.summary':'Default configuration is ready; normally no manual changes are needed.','settings.handleEnabled':'Enable scheduler takeover','settings.emergencyFallbackHelp':'fallback: fill-first also enables the Global emergency Provider exit. When every OAuth account is unavailable, enabled Codex API and OpenAI-compatible Providers may cross OAuth priority and a strict active pool. Clear fallback to restore explicit failure. There is no separate switch.','settings.excludeFreeAccounts':'Exclude free accounts by default','settings.excludeFreeAccountsHelp':'Unknown plans are not actively selected. When all eligible request candidates are known Free, relax the filter and actively select as usual.','settings.usageFeedback':'Mark quota exhausted from failure feedback','settings.enableResetProbe':'Enable automatic reset probe','settings.enableResetProbeHelp':'When the quota reset time has arrived but OpenAI has not yet generated a new quota cycle, send one tiny Codex request to try to activate it, then read the quota again to confirm the result. This may consume a small amount of quota.','settings.provisionalProbe':'Allow quota probes when the account roster is unconfirmed (high risk)','settings.provisionalProbeHelp':'When CPA temporarily cannot confirm the current accounts and priorities, allow the plugin to use the most recently saved account roster for quota reset probes. Account credentials are revalidated every time, but the plugin still cannot guarantee that accounts have not been removed or reprioritized. This should normally remain off.','settings.monthlyMode':'Monthly mode','settings.expiryOrder':'Sort by expiry time','settings.monthlyPriority':'Prefer Monthly','settings.selectionStrategy':'Selection strategy','settings.strategyLegacy':'Legacy compatible order','settings.selectionStrategyHelp':'The strategy applies only after availability class and plugin priority. Unknown values sort after known values.','settings.subscriptionOrder':'Subscription order','settings.subscriptionOrderHelp':'Enter plans from low to high, separated by commas or new lines. Subscription strategies require a non-empty list without duplicates.','settings.refreshInterval':'Quota refresh interval','settings.staleAfter':'Stale cache threshold','settings.refreshActiveWindow':'Refresh active window','settings.refreshAfterResetDelay':'Refresh after reset delay','settings.refreshRetryDelays':'Refresh retry delays','settings.refreshOnStartup':'Refresh on startup','settings.maxConcurrency':'Max refresh concurrency','settings.circuitFailureThreshold':'Circuit failure threshold','settings.circuitOpenDuration':'Circuit open duration','settings.circuitHalfOpenSuccessThreshold':'Half-open recovery successes','settings.maxLogEntries':'Max log entries','settings.logRetention':'Log retention',
     'actions.loadData':'Load Data','actions.saveSettings':'Save Settings','actions.refreshQuota':'Refresh Quota','actions.exportConfig':'Export Config','actions.importConfig':'Import Config','actions.refreshLogs':'Refresh Logs','actions.exportLogs':'Export Logs','actions.close':'Close','actions.saveAccount':'Save Account','actions.cancel':'Cancel',
-    'queue.title':'Account Queue','queue.description':'Account cards are sorted by the current scheduler priority. The first available account is preferred for the next Codex request.','metrics.nextAccount':'Next account','metrics.lastSelected':'Last selected',
+    'queue.title':'Account Queue','queue.description':'Account cards are sorted by the current scheduler priority. The first available account is preferred for the next Codex request.','metrics.nextAccount':'Next account','metrics.lastSelected':'Last selected','metrics.emergencyFallback':'Global emergency Provider exit',
     'logs.title':'Scheduler Logs','logs.empty':'No logs yet. Send a request or refresh quota manually to show records here.',
     'edit.title':'Edit Account','edit.alias':'Alias','account.schedulerPriority':'Plugin priority','edit.groupID':'Group ID','edit.groupName':'Group name','edit.tags':'Tags','edit.notes':'Account notes','edit.groupNotes':'Group notes',
     'notice.settingsSaved':'Settings saved.','notice.statusLoaded':'Current settings loaded. Review them, then save again.','notice.refreshRequested':'Background quota refresh requested.','notice.accountSaved':'Account card saved.','notice.refreshOneRequested':'Quota refresh requested for this account.','notice.configExported':'Configuration exported.','notice.logsExported':'Logs exported.','notice.configImported':'Configuration imported.','error.requestFailed':'Request failed: {status}','error.managementKeyRequired':'CPA management key is required','error.schedulerPriorityInteger':'Plugin priority must be a safe integer.',
@@ -1457,9 +1465,9 @@ const TRANSLATIONS={
   'zh-CN':{
     'app.title':'Codex 额度调度器','app.subtitle':'优化版 Fill First。配置、别名、分组、标签和备注由插件内部状态文件保存。','app.language':'界面语言','connection.managementKey':'CPA 管理密钥','connection.backgroundHint':'只要调度器启动了，它就会在后台自动运行，无需保持页面开启。',
     'resetProbe.warningTitle':'自动激活新的额度周期默认关闭','resetProbe.warningBody':'开启后，调度器会在额度重置时间已到但新周期尚未生成时，发送一次极小的 Codex 请求尝试激活新周期。',
-    'settings.title':'调度设置','settings.summary':'默认配置已经都设置好了，正常情况下不需要手动设置。','settings.handleEnabled':'启用调度接管','settings.excludeFreeAccounts':'默认排除 Free 账号','settings.excludeFreeAccountsHelp':'未知计划不由插件主动选择；全部合格请求候选均为已知 Free 时，本次放宽过滤并正常主动选择。','settings.usageFeedback':'失败反馈标记额度耗尽','settings.enableResetProbe':'自动激活新的额度周期','settings.enableResetProbeHelp':'当额度重置时间已经到达，但 OpenAI 尚未生成新的额度周期时，发送一次极小的 Codex 请求尝试激活新周期，然后重新读取额度确认结果。可能消耗少量额度。','settings.provisionalProbe':'账号列表未确认时仍允许额度探测（高风险）','settings.provisionalProbeHelp':'CPA 暂时无法确认当前账号及优先级时，允许插件使用最近一次保存的账号列表执行额度重置探测。每次都会重新验证账号凭据，但仍无法保证账号未被删除或调整优先级。通常应保持关闭。','settings.monthlyMode':'月度账号使用方式','settings.expiryOrder':'按到期时间排序','settings.monthlyPriority':'优先使用月度账号','settings.selectionStrategy':'选择策略','settings.strategyLegacy':'Legacy（兼容旧排序）','settings.selectionStrategyHelp':'策略只在可用性等级和插件优先级相同时生效；未知数据排在已知数据之后。','settings.subscriptionOrder':'订阅顺序','settings.subscriptionOrderHelp':'按从低到高填写，以逗号或换行分隔。订阅策略必须配置且不能重复。','settings.refreshInterval':'额度刷新间隔','settings.staleAfter':'缓存过期判定','settings.refreshActiveWindow':'活跃刷新窗口','settings.refreshAfterResetDelay':'重置后刷新延迟','settings.refreshRetryDelays':'刷新失败重试间隔','settings.refreshOnStartup':'启动时刷新额度','settings.maxConcurrency':'最大并发刷新','settings.circuitFailureThreshold':'熔断失败阈值','settings.circuitOpenDuration':'熔断等待时间','settings.circuitHalfOpenSuccessThreshold':'半开恢复成功次数','settings.maxLogEntries':'最大日志条数','settings.logRetention':'日志保留时间',
+    'settings.title':'调度设置','settings.summary':'默认配置已经都设置好了，正常情况下不需要手动设置。','settings.handleEnabled':'启用调度接管','settings.emergencyFallbackHelp':'fallback: fill-first 同时启用全局应急 Provider 出口：OAuth 全部不可选时可跨越 OAuth priority 和严格活动池使用已启用的 Codex API 或 OpenAI 兼容 Provider；将 fallback 清空即可恢复明确失败。此语义没有独立开关。','settings.excludeFreeAccounts':'默认排除 Free 账号','settings.excludeFreeAccountsHelp':'未知计划不由插件主动选择；全部合格请求候选均为已知 Free 时，本次放宽过滤并正常主动选择。','settings.usageFeedback':'失败反馈标记额度耗尽','settings.enableResetProbe':'自动激活新的额度周期','settings.enableResetProbeHelp':'当额度重置时间已经到达，但 OpenAI 尚未生成新的额度周期时，发送一次极小的 Codex 请求尝试激活新周期，然后重新读取额度确认结果。可能消耗少量额度。','settings.provisionalProbe':'账号列表未确认时仍允许额度探测（高风险）','settings.provisionalProbeHelp':'CPA 暂时无法确认当前账号及优先级时，允许插件使用最近一次保存的账号列表执行额度重置探测。每次都会重新验证账号凭据，但仍无法保证账号未被删除或调整优先级。通常应保持关闭。','settings.monthlyMode':'月度账号使用方式','settings.expiryOrder':'按到期时间排序','settings.monthlyPriority':'优先使用月度账号','settings.selectionStrategy':'选择策略','settings.strategyLegacy':'Legacy（兼容旧排序）','settings.selectionStrategyHelp':'策略只在可用性等级和插件优先级相同时生效；未知数据排在已知数据之后。','settings.subscriptionOrder':'订阅顺序','settings.subscriptionOrderHelp':'按从低到高填写，以逗号或换行分隔。订阅策略必须配置且不能重复。','settings.refreshInterval':'额度刷新间隔','settings.staleAfter':'缓存过期判定','settings.refreshActiveWindow':'活跃刷新窗口','settings.refreshAfterResetDelay':'重置后刷新延迟','settings.refreshRetryDelays':'刷新失败重试间隔','settings.refreshOnStartup':'启动时刷新额度','settings.maxConcurrency':'最大并发刷新','settings.circuitFailureThreshold':'熔断失败阈值','settings.circuitOpenDuration':'熔断等待时间','settings.circuitHalfOpenSuccessThreshold':'半开恢复成功次数','settings.maxLogEntries':'最大日志条数','settings.logRetention':'日志保留时间',
     'actions.loadData':'加载数据','actions.saveSettings':'保存设置','actions.refreshQuota':'刷新额度','actions.exportConfig':'导出配置','actions.importConfig':'导入配置','actions.refreshLogs':'刷新日志','actions.exportLogs':'导出日志','actions.close':'关闭','actions.saveAccount':'保存账号','actions.cancel':'取消',
-    'queue.title':'账号队列','queue.description':'账号卡片按当前调度优先级排序。第一个可用账号就是下一次 Codex 请求会优先选择的账号。','metrics.nextAccount':'下一账号','metrics.lastSelected':'最近选择',
+    'queue.title':'账号队列','queue.description':'账号卡片按当前调度优先级排序。第一个可用账号就是下一次 Codex 请求会优先选择的账号。','metrics.nextAccount':'下一账号','metrics.lastSelected':'最近选择','metrics.emergencyFallback':'全局应急 Provider 出口',
     'logs.title':'调度日志','logs.empty':'暂无日志。发起请求或手动刷新额度后，这里会显示记录。',
     'edit.title':'编辑账号','edit.alias':'别名','account.schedulerPriority':'插件优先级','edit.groupID':'分组 ID','edit.groupName':'分组名称','edit.tags':'标签','edit.notes':'账号备注','edit.groupNotes':'分组备注',
     'notice.settingsSaved':'设置已保存，页面内容会自动更新。','notice.statusLoaded':'已加载当前设置。请确认后再次保存。','notice.refreshRequested':'已请求后台刷新额度，页面内容会自动更新。','notice.accountSaved':'账号卡片已保存，页面内容会自动更新。','notice.refreshOneRequested':'已请求刷新该账号额度，页面内容会自动更新。','notice.configExported':'配置已导出。','notice.logsExported':'日志已导出。','notice.configImported':'配置已导入，页面内容会自动更新。','error.requestFailed':'请求失败：{status}','error.managementKeyRequired':'需要填写 CPA 管理密钥','error.schedulerPriorityInteger':'插件优先级必须是安全整数。'
@@ -1518,7 +1526,7 @@ function applyLocale(){document.documentElement.lang=currentLocale;document.titl
 function changeLocale(locale){currentLocale=normalizeLocale(locale);try{window.localStorage.setItem(LOCALE_STORAGE_KEY,currentLocale)}catch(error){}applyLocale()}
 function showNotice(text,isError){notice.hidden=false;notice.textContent=text;notice.className='notice'+(isError?' error':'')}
 function rebuildDerivedState(){accountsByID.clear();groupsByID.clear();for(const account of STATUS.accounts||[]){if(account.auth_id)accountsByID.set(account.auth_id,account);if(account.group_id)groupsByID.set(account.group_id,{name:account.group||'',notes:account.group_notes||''})}for(const group of STATUS.groups||[]){if(group.id)groupsByID.set(group.id,{name:group.name||'',notes:group.notes||''})}}
-function renderMetrics(){const empty=currentLocale==='en'?'None':'暂无';const monthlyMode=STATUS.monthly_mode==='priority'?(currentLocale==='en'?'prefer Monthly':'优先使用'):(currentLocale==='en'?'by expiry time':'按到期时间');const setText=(id,text)=>{const node=document.getElementById(id);if(node)node.textContent=text};setText('metricNextAuthID',STATUS.next_auth_id||empty);setText('metricSelectionStrategy',STATUS.selection_strategy||'legacy');setText('metricMonthlyMode',monthlyMode);setText('metricLastSelected',STATUS.last_selected||empty)}
+function renderMetrics(){const empty=currentLocale==='en'?'None':'暂无';const monthlyMode=STATUS.monthly_mode==='priority'?(currentLocale==='en'?'prefer Monthly':'优先使用'):(currentLocale==='en'?'by expiry time':'按到期时间');const emergency=STATUS.last_emergency_result||{};const emergencyState=STATUS.host_supports_emergency_delegate?(emergency.delegate?[emergency.delegate,emergency.oauth_stage_reason].filter(Boolean).join(' · '):(currentLocale==='en'?'Supported':'支持')):(currentLocale==='en'?'Not advertised':'未声明支持');const setText=(id,text)=>{const node=document.getElementById(id);if(node)node.textContent=text};setText('metricNextAuthID',STATUS.next_auth_id||empty);setText('metricSelectionStrategy',STATUS.selection_strategy||'legacy');setText('metricMonthlyMode',monthlyMode);setText('metricLastSelected',STATUS.last_selected||empty);setText('metricEmergencyFallback',emergencyState)}
 function hasManagementKey(){const input=document.getElementById('managementKey');return !!(input&&(input.value||'').trim())}
 function settingsFocusedOrDirty(){const panel=document.getElementById('settingsPanel');return settingsDirty||(panel&&panel.contains(document.activeElement))}
 function updateResetProbeWarning(){const warning=document.getElementById('resetProbeWarning');if(warning)warning.hidden=!(statusLoaded&&STATUS.settings&&STATUS.settings.enable_reset_probe!==true)}

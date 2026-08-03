@@ -31,6 +31,12 @@ subscription_order:
   - pro
 
 monthly_mode: expiry_order
+# Master switch for ordinary fallback and the global emergency Provider exit.
+# With a compatible host, fill-first allows enabled Codex API and
+# OpenAI-compatible Providers only after every OAuth Codex account is
+# unavailable. OAuth always wins regardless of Provider priority. Set this to
+# an explicit empty string to disable emergency takeover and keep the OAuth
+# failure. There is no separate emergency fallback setting.
 fallback: fill-first
 enable_usage_feedback: true
 enable_reset_probe: false

@@ -191,18 +191,32 @@ type CPAAdmissionState struct {
 }
 
 type StateSnapshot struct {
-	Config              Config
-	Accounts            []AccountState
-	CPAAdmission        CPAAdmissionState
-	CPAAdmissionVersion uint64
-	Annotations         AnnotationState
-	Logs                []LogEntry
-	LastSelected        string
-	LastReason          string
-	LastCodexActivityAt time.Time
-	LastAuthScanAt      time.Time
-	CodexAuthCount      int
-	Now                 time.Time
+	Config                        Config
+	Accounts                      []AccountState
+	CPAAdmission                  CPAAdmissionState
+	CPAAdmissionVersion           uint64
+	Annotations                   AnnotationState
+	Logs                          []LogEntry
+	LastSelected                  string
+	LastReason                    string
+	LastCodexActivityAt           time.Time
+	LastAuthScanAt                time.Time
+	CodexAuthCount                int
+	HostSupportsEmergencyDelegate bool
+	LastEmergencyDecision         EmergencyDecisionStatus
+	Now                           time.Time
+}
+
+type EmergencyDecisionStatus struct {
+	Observed                      bool      `json:"-"`
+	ObservedAt                    time.Time `json:"observed_at"`
+	HostSupportsEmergencyDelegate bool      `json:"host_supports_emergency_delegate"`
+	Delegate                      string    `json:"delegate"`
+	OAuthStageReason              string    `json:"oauth_stage_reason"`
+	ActivePoolBypassed            bool      `json:"active_pool_bypassed"`
+	CandidateCount                int       `json:"candidate_count"`
+	AdmittedCount                 int       `json:"admitted_count"`
+	ActiveSelectionCount          int       `json:"active_selection_count"`
 }
 
 type LogEntry struct {

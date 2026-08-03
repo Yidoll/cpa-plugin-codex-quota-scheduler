@@ -8,18 +8,20 @@ import (
 )
 
 type PluginState struct {
-	mu                  sync.RWMutex
-	cfg                 Config
-	accounts            map[string]AccountState
-	cpaAdmission        CPAAdmissionState
-	cpaAdmissionVersion uint64
-	annotations         AnnotationState
-	logs                []LogEntry
-	lastSelected        string
-	lastReason          string
-	lastCodexActivityAt time.Time
-	lastAuthScanAt      time.Time
-	codexAuthCount      int
+	mu                            sync.RWMutex
+	cfg                           Config
+	accounts                      map[string]AccountState
+	cpaAdmission                  CPAAdmissionState
+	cpaAdmissionVersion           uint64
+	annotations                   AnnotationState
+	logs                          []LogEntry
+	lastSelected                  string
+	lastReason                    string
+	lastCodexActivityAt           time.Time
+	lastAuthScanAt                time.Time
+	codexAuthCount                int
+	hostSupportsEmergencyDelegate bool
+	lastEmergencyDecision         EmergencyDecisionStatus
 }
 
 func NewPluginState(cfg Config) *PluginState {
@@ -42,6 +44,8 @@ func (s *PluginState) cloneForLegacyTransaction() *PluginState {
 	out.annotations = cloneAnnotationState(s.annotations)
 	out.logs = cloneLogs(s.logs)
 	out.lastSelected, out.lastReason, out.lastCodexActivityAt, out.lastAuthScanAt, out.codexAuthCount = s.lastSelected, s.lastReason, s.lastCodexActivityAt, s.lastAuthScanAt, s.codexAuthCount
+	out.lastEmergencyDecision = s.lastEmergencyDecision
+	out.hostSupportsEmergencyDelegate = s.hostSupportsEmergencyDelegate
 	return out
 }
 
@@ -327,6 +331,19 @@ func (s *PluginState) RecordSelection(authID, reason string) {
 	s.lastReason = reason
 }
 
+func (s *PluginState) RecordEmergencyDecision(decision EmergencyDecisionStatus) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	decision.Observed = true
+	s.lastEmergencyDecision = decision
+}
+
+func (s *PluginState) RecordHostEmergencyCapability(supported bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hostSupportsEmergencyDelegate = supported
+}
+
 func (s *PluginState) RecordCodexActivity(now time.Time) {
 	if now.IsZero() {
 		now = time.Now()
@@ -516,18 +533,20 @@ func (s *PluginState) Snapshot(now time.Time) StateSnapshot {
 	accounts = ApplyAnnotations(accounts, s.annotations)
 
 	return StateSnapshot{
-		Config:              cloneConfig(s.cfg),
-		Accounts:            accounts,
-		CPAAdmission:        cloneCPAAdmission(s.cpaAdmission),
-		CPAAdmissionVersion: s.cpaAdmissionVersion,
-		Annotations:         cloneAnnotationState(s.annotations),
-		Logs:                cloneLogs(retainedLogs(s.logs, NormalizeConfig(s.cfg), now)),
-		LastSelected:        s.lastSelected,
-		LastReason:          s.lastReason,
-		LastCodexActivityAt: s.lastCodexActivityAt,
-		LastAuthScanAt:      s.lastAuthScanAt,
-		CodexAuthCount:      s.codexAuthCount,
-		Now:                 now,
+		Config:                        cloneConfig(s.cfg),
+		Accounts:                      accounts,
+		CPAAdmission:                  cloneCPAAdmission(s.cpaAdmission),
+		CPAAdmissionVersion:           s.cpaAdmissionVersion,
+		Annotations:                   cloneAnnotationState(s.annotations),
+		Logs:                          cloneLogs(retainedLogs(s.logs, NormalizeConfig(s.cfg), now)),
+		LastSelected:                  s.lastSelected,
+		LastReason:                    s.lastReason,
+		LastCodexActivityAt:           s.lastCodexActivityAt,
+		LastAuthScanAt:                s.lastAuthScanAt,
+		CodexAuthCount:                s.codexAuthCount,
+		HostSupportsEmergencyDelegate: s.hostSupportsEmergencyDelegate,
+		LastEmergencyDecision:         s.lastEmergencyDecision,
+		Now:                           now,
 	}
 }
 

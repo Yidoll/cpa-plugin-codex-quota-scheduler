@@ -207,6 +207,51 @@ max_log_entries: 200
 log_retention: 24h
 ```
 
+### Global emergency Provider fallback
+
+`fallback: fill-first` is also the master switch for the global emergency
+Provider exit. When the authoritative OAuth Codex scope has no selectable
+account because it is empty, exhausted, circuit-open, authentication-blocked,
+or excluded by plan eligibility, a compatible host may use enabled
+configuration-backed Codex API Providers and OpenAI-compatible Providers.
+
+OAuth always remains preferred, regardless of Provider priority. Only after an
+in-memory OAuth guard confirms that no OAuth account can be selected does the
+host compare Provider priority. Codex API and OpenAI-compatible Providers share
+one priority order; equal priorities use deterministic Auth ID order. The
+Provider pool is global and can cross OAuth priority and a strict active pool,
+but it never admits out-of-pool or lower-priority OAuth accounts.
+
+Clear `fallback` to disable both ordinary and emergency delegation and restore
+an explicit OAuth-stage failure:
+
+```yaml
+fallback: ""
+```
+
+There is no separate emergency fallback setting. The bilingual Management UI
+shows whether the host advertised the emergency delegate and the latest safe
+delegate, OAuth-stage reason, candidate counts, and active-pool bypass result.
+It never displays API keys, tokens, request headers, Provider URLs, or auth
+paths.
+
+This plugin must run with a CLIProxyAPI release that includes
+`SchedulerOptions.SupportedBuiltinDelegates` and
+`emergency-provider-fill-first`. Until that host SDK is formally released, the
+repository uses a local `replace` directive for cross-repository verification.
+For release, publish and deploy the host first, remove the `replace`, and pin
+the plugin to that formal host version. Roll back in reverse order: plugin
+first, host second.
+
+Compatibility matrix:
+
+| Host | Plugin | Behavior |
+| --- | --- | --- |
+| New | Old | Existing OAuth and ordinary `fill-first` behavior is unchanged. |
+| Old | New | Capability is absent; the plugin keeps ordinary `fill-first` and records `emergency_delegate_unsupported`. |
+| New | New | OAuth remains preferred; the restricted global Provider exit is available after OAuth is unavailable. |
+| Old | Old | Existing behavior is unchanged. |
+
 `exclude_free_accounts` is presence-aware across lifecycle YAML, persisted
 Management settings, import, and export. An explicit lifecycle value overrides
 the saved value for that lifecycle without deleting it; omitting the field
@@ -315,6 +360,8 @@ The page provides:
 - Log viewing and export.
 - Configuration export and import.
 - English and Chinese interface switching.
+- Host emergency-delegate capability and the latest non-sensitive emergency
+  result, with bilingual guidance for enabling and rolling back the behavior.
 
 ## Build
 

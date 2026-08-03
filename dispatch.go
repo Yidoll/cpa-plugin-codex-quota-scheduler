@@ -168,6 +168,19 @@ func logSchedulerDecision(store *PluginState, req pluginapi.SchedulerPickRequest
 	if decision.PlanFilterContext != "" {
 		fields["plan_filter_context"] = decision.PlanFilterContext
 	}
+	if decision.CompatibilityReason != "" {
+		fields["compatibility_reason"] = decision.CompatibilityReason
+	}
+	if decision.OAuthStageReason != "" {
+		fields["oauth_stage_reason"] = decision.OAuthStageReason
+	}
+	fields["host_supports_emergency_delegate"] = decision.HostSupportsEmergencyDelegate
+	if decision.DelegateBuiltin != "" {
+		fields["delegate_builtin"] = decision.DelegateBuiltin
+	}
+	if decision.ActivePoolBypassed {
+		fields["active_pool_bypassed"] = true
+	}
 	if decision.AuthID != "" {
 		event = "scheduler.selected"
 		message = "请求已由插件接管"
@@ -192,6 +205,19 @@ func logSchedulerDecision(store *PluginState, req pluginapi.SchedulerPickRequest
 		message = "插件已处理但未选择账号"
 	}
 	store.RecordLog(level, event, message, fields, now)
+	store.RecordHostEmergencyCapability(decision.HostSupportsEmergencyDelegate)
+	if decision.DelegateBuiltin != "" {
+		store.RecordEmergencyDecision(EmergencyDecisionStatus{
+			ObservedAt:                    now,
+			HostSupportsEmergencyDelegate: decision.HostSupportsEmergencyDelegate,
+			Delegate:                      decision.DelegateBuiltin,
+			OAuthStageReason:              decision.OAuthStageReason,
+			ActivePoolBypassed:            decision.ActivePoolBypassed,
+			CandidateCount:                decision.CandidateCount,
+			AdmittedCount:                 decision.AdmittedCount,
+			ActiveSelectionCount:          decision.ActiveSelectionCount,
+		})
+	}
 }
 
 func displaySelectionStrategy(strategy SelectionStrategy) string {
