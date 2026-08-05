@@ -26,8 +26,11 @@ func TestManagementRegisterExposesStatusResourceAndRoutes(t *testing.T) {
 	if resources["/status"].Menu == "" {
 		t.Fatalf("status resource Menu is empty: %#v", resources["/status"])
 	}
-	if _, ok := resources["/status-data"]; ok {
-		t.Fatalf("status-data resource is still registered: %#v", resp.Resources)
+	if _, ok := resources["/status-data"]; !ok {
+		t.Fatalf("status-data resource is missing: %#v", resp.Resources)
+	}
+	if resources["/status-data"].Menu != "" {
+		t.Fatalf("status-data resource must not create a menu entry: %#v", resp.Resources)
 	}
 	if len(resources) != len(resp.Resources) {
 		t.Fatalf("resources = %#v", resp.Resources)

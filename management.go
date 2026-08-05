@@ -292,6 +292,10 @@ func RegisterManagement() pluginapi.ManagementRegistrationResponse {
 				Menu:        "Codex 调度器",
 				Description: "Open scheduler quota status.",
 			},
+			{
+				Path:        "/status-data",
+				Description: "Keyless scheduler configuration and aggregate status.",
+			},
 		},
 		Routes: []pluginapi.ManagementRoute{
 			{Method: http.MethodGet, Path: managementBasePath + "/status", Description: "Scheduler quota status."},

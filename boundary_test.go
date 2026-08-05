@@ -48,6 +48,9 @@ func TestSuiteBoundary(t *testing.T) {
 		if leaked := boundaryLeaks(body, sentinels.Values()); len(leaked) != 0 {
 			t.Fatalf("%s leaked runtime sentinels %q", route, leaked)
 		}
+		if route == "/status-data" {
+			continue
+		}
 		for _, identifier := range []string{"quota", "scheduler_priority", "MANAGEMENT_BASE"} {
 			if !strings.Contains(body, identifier) {
 				t.Errorf("%s static shell missing dynamic-loading identifier %q", route, identifier)
