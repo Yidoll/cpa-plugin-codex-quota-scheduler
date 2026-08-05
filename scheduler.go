@@ -12,6 +12,8 @@ type PickDecision struct {
 	Handled                       bool
 	DelegateBuiltin               string
 	Reason                        string
+	ActivePool                    string
+	CPATier                       int
 	Ordered                       []ScheduledAccount
 	Strategy                      SelectionStrategy
 	StrategyKnown                 bool

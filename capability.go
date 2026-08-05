@@ -54,6 +54,14 @@ type RosterEntry struct {
 	AuthIndex string
 	Provider  string
 	Priority  *int
+	// Inventory-only safety fields. They describe the protected Codex
+	// inventory and are never authoritative scheduling truth.
+	AccountType   string
+	Status        string
+	StatusMessage string
+	Email         string
+	Disabled      bool
+	Unavailable   bool
 }
 
 type HostRosterSnapshot struct {
@@ -140,4 +148,32 @@ func HighestCodexTier(entries []RosterEntry) (priority int, ids []string, ok boo
 	}
 	sort.Strings(ids)
 	return priority, ids, true
+}
+
+// eligibleRosterEntries keeps only codex entries that may participate in the
+// authoritative roster. Inventory-only entries (disabled, unavailable, API-key
+// credentials and auth-failure statuses) stay in the full inventory snapshot
+// but never enter scheduling truth.
+func eligibleRosterEntries(entries []RosterEntry) []RosterEntry {
+	out := make([]RosterEntry, 0, len(entries))
+	for _, entry := range entries {
+		if !rosterEntrySchedulable(entry) {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// rosterEntrySchedulable reports whether a retained Codex inventory entry may
+// participate in the authoritative roster. API-key credentials and entries
+// whose host status indicates authentication failure stay inventory-only.
+func rosterEntrySchedulable(entry RosterEntry) bool {
+	if entry.Disabled || entry.Unavailable {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(entry.AccountType), "api_key") {
+		return false
+	}
+	return !inventoryAuthFailureStatus(entry.Status)
 }

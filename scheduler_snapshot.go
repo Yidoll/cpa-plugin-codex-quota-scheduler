@@ -18,6 +18,8 @@ type SchedulerSnapshot struct {
 	MonthlyMode         MonthlyMode
 	SelectionStrategy   SelectionStrategy
 	SubscriptionRanks   map[string]int
+	ActivePool          string
+	CPATier             int
 	Accounts            []AccountView
 	ActiveHighestTier   map[string]struct{}
 	AdmissionObserved   bool
@@ -90,7 +92,7 @@ func schedulerPickPublished(req pluginapi.SchedulerPickRequest, now time.Time) P
 	}
 	result := selectAccountSkipping(*snapshot, candidates, now, nil, snapshot.Trials)
 	var skipped map[AuthInstanceID]struct{}
-	for result.AuthID != "" && result.Class == Opportunistic && (snapshot.Trials == nil || !snapshot.Trials.TryBegin(result.Instance, now)) {
+	for result.AuthID != "" && result.Class == Opportunistic && snapshot.Trials != nil && !snapshot.Trials.TryBegin(result.Instance, now) {
 		if skipped == nil {
 			skipped = make(map[AuthInstanceID]struct{})
 		}
@@ -100,7 +102,9 @@ func schedulerPickPublished(req pluginapi.SchedulerPickRequest, now time.Time) P
 	if result.AuthID != "" && result.Class == Opportunistic {
 		select {
 		case snapshot.EvidenceIntents <- EvidenceIntent{AuthID: result.AuthID, Instance: result.Instance, BeganAt: now}:
-			snapshot.Trials.MarkEvidencePending(result.Instance, true)
+			if snapshot.Trials != nil {
+				snapshot.Trials.MarkEvidencePending(result.Instance, true)
+			}
 		default:
 		}
 	}
@@ -111,11 +115,9 @@ func schedulerPickPublished(req pluginapi.SchedulerPickRequest, now time.Time) P
 	if snapshot.Fallback == FallbackFillFirst {
 		delegate := pluginapi.SchedulerBuiltinFillFirst
 		compatibilityReason := ""
-		activePoolBypassed := false
 		if !schedulerRequestHasPinnedAuth(req) {
 			if hostSupportsEmergencyDelegate {
 				delegate = pluginapi.SchedulerBuiltinEmergencyProviderFillFirst
-				activePoolBypassed = true
 			} else {
 				compatibilityReason = "emergency_delegate_unsupported"
 			}
@@ -127,7 +129,6 @@ func schedulerPickPublished(req pluginapi.SchedulerPickRequest, now time.Time) P
 			CompatibilityReason:           compatibilityReason,
 			HostSupportsEmergencyDelegate: hostSupportsEmergencyDelegate,
 			OAuthStageReason:              result.Reason,
-			ActivePoolBypassed:            activePoolBypassed,
 		}), now)
 	}
 	return observeSchedulerDecision(snapshot, req, selectionPickDecision(snapshot, result, PickDecision{Reason: result.Reason, HostSupportsEmergencyDelegate: hostSupportsEmergencyDelegate}), now)
@@ -216,7 +217,7 @@ func schedulerSnapshotFromState(state StateSnapshot, trials *TrialRegistry) *Sch
 		activity = pump.enqueue
 		observation = pump.enqueueObservation
 	}
-	return &SchedulerSnapshot{HandleEnabled: state.Config.HandleEnabled, ExcludeFreeAccounts: state.Config.ExcludeFreeAccounts, Fallback: state.Config.Fallback, MonthlyMode: state.Config.MonthlyMode, SelectionStrategy: state.Config.SelectionStrategy, SubscriptionRanks: subscriptionRanks(state.Config.SubscriptionOrder), Accounts: accounts, ActiveHighestTier: active, AdmissionObserved: state.CPAAdmission.Observed, Trials: trials, EvidenceIntents: globalEvidenceIntents, Activity: activity, Observation: observation}
+	return &SchedulerSnapshot{HandleEnabled: state.Config.HandleEnabled, ExcludeFreeAccounts: state.Config.ExcludeFreeAccounts, Fallback: state.Config.Fallback, MonthlyMode: state.Config.MonthlyMode, SelectionStrategy: state.Config.SelectionStrategy, SubscriptionRanks: subscriptionRanks(state.Config.SubscriptionOrder), ActivePool: state.Config.ActivePool, Accounts: accounts, ActiveHighestTier: active, AdmissionObserved: state.CPAAdmission.Observed, Trials: trials, EvidenceIntents: globalEvidenceIntents, Activity: activity, Observation: observation}
 }
 
 func accountViewFromState(a AccountState, cfg Config, now time.Time, trials *TrialRegistry) AccountView {
@@ -246,6 +247,7 @@ func accountViewFromState(a AccountState, cfg Config, now time.Time, trials *Tri
 	}
 	return AccountView{
 		ID: a.AuthID, AuthIndex: a.AuthIndex, Instance: a.Instance,
+		GroupID:        a.Annotation.GroupID,
 		PluginPriority: a.Annotation.SchedulerPriority, Family: a.Family,
 		Cache: cache, LastKnownAvailable: a.LastError == "", Exhausted: exhausted,
 		ResetAt: reset, AuthBlocked: a.Refresh.AuthFailure, Circuit: circuitClass,

@@ -1,4 +1,7 @@
 handle_enabled: true
+# Codex group selection is managed by CLIProxyAPI codex-groups. Historical
+# active_pool/group_id/groups fields may remain in user data for compatibility,
+# but are not valid new plugin scheduling settings.
 # Default-on active-selection policy. Only normalized "free" is free. Empty
 # plans are unknown and are not actively selected. If all eligible request
 # candidates are known free, the filter is relaxed for that request. Set false

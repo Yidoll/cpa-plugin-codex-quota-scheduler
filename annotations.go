@@ -5,9 +5,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
+
+const accountIdentityConflict = "account_identity_conflict"
 
 func NormalizeAnnotationState(state AnnotationState) AnnotationState {
 	normalized := AnnotationState{
@@ -26,22 +29,160 @@ func NormalizeAnnotationState(state AnnotationState) AnnotationState {
 }
 
 func ResolveAnnotationKey(account AccountState) string {
-	if account.ChatGPTAccountID == "" && account.Instance != 0 {
-		return "instance:" + strconv.FormatUint(uint64(account.Instance), 10)
+	keys := annotationCandidates(account)
+	if len(keys) == 0 {
+		return ""
+	}
+	return keys[0]
+}
+
+// annotationCandidates returns annotation keys in stable identity resolution
+// order: ChatGPT Account ID, Auth ID, normalized email, stable Auth Index,
+// then the unresolved instance placeholder.
+func annotationCandidates(account AccountState) []string {
+	var keys []string
+	if account.ChatGPTAccountID != "" {
+		keys = append(keys, "chatgpt:"+account.ChatGPTAccountID)
 	}
 	if account.AuthID != "" {
-		return "auth:" + account.AuthID
+		keys = append(keys, "auth:"+account.AuthID)
 	}
-	if account.ChatGPTAccountID != "" {
-		return "chatgpt:" + account.ChatGPTAccountID
-	}
-	if account.Email != "" {
-		return "email:" + account.Email
+	if email := normalizeEmail(account.Email); email != "" {
+		keys = append(keys, "email:"+email)
 	}
 	if account.AuthIndex != "" {
-		return "index:" + account.AuthIndex
+		keys = append(keys, "index:"+account.AuthIndex)
 	}
-	return ""
+	if account.ChatGPTAccountID == "" && account.Instance != 0 {
+		keys = append(keys, "instance:"+strconv.FormatUint(uint64(account.Instance), 10))
+	}
+	return keys
+}
+
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+type AnnotationIdentityConflict struct {
+	Reason     string   `json:"reason"`
+	Kind       string   `json:"kind"`
+	AccountIDs []string `json:"account_ids,omitempty"`
+}
+
+func ApplyAnnotationsWithConflicts(accounts []AccountState, state AnnotationState) ([]AccountState, []AnnotationIdentityConflict) {
+	return applyAnnotations(accounts, state)
+}
+
+func ApplyAnnotations(accounts []AccountState, state AnnotationState) []AccountState {
+	applied, _ := applyAnnotations(accounts, state)
+	return applied
+}
+
+func applyAnnotations(accounts []AccountState, state AnnotationState) ([]AccountState, []AnnotationIdentityConflict) {
+	normalized := NormalizeAnnotationState(state)
+	applied := make([]AccountState, len(accounts))
+	hitKeys := make([][]string, len(accounts))
+	for i, account := range accounts {
+		applied[i] = cloneAccountState(account)
+		var keys []string
+		for _, key := range annotationCandidates(account) {
+			if _, ok := normalized.Accounts[key]; ok {
+				keys = append(keys, key)
+			}
+		}
+		hitKeys[i] = keys
+	}
+
+	accountsByKey := make(map[string][]string, len(normalized.Accounts))
+	for i, keys := range hitKeys {
+		for _, key := range keys {
+			accountsByKey[key] = append(accountsByKey[key], accounts[i].AuthID)
+		}
+	}
+
+	conflictingKeys := make(map[string]struct{})
+	for key, ids := range accountsByKey {
+		if len(uniqueNonEmpty(ids)) >= 2 {
+			conflictingKeys[key] = struct{}{}
+		}
+	}
+	for _, keys := range hitKeys {
+		if len(keys) < 2 {
+			continue
+		}
+		for _, key := range keys {
+			conflictingKeys[key] = struct{}{}
+		}
+	}
+
+	var conflicts []AnnotationIdentityConflict
+	seen := make(map[string]struct{})
+	addConflict := func(key string, accountIDs []string) {
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		conflicts = append(conflicts, AnnotationIdentityConflict{
+			Reason:     accountIdentityConflict,
+			Kind:       annotationKeyKind(key),
+			AccountIDs: accountIDs,
+		})
+	}
+	for key, ids := range accountsByKey {
+		ids = uniqueNonEmpty(ids)
+		if len(ids) >= 2 {
+			addConflict(key, ids)
+		}
+	}
+	for i, keys := range hitKeys {
+		if len(keys) < 2 {
+			continue
+		}
+		for _, key := range keys {
+			addConflict(key, []string{accounts[i].AuthID})
+		}
+	}
+	sort.Slice(conflicts, func(i, j int) bool {
+		if conflicts[i].Kind != conflicts[j].Kind {
+			return conflicts[i].Kind < conflicts[j].Kind
+		}
+		return strings.Join(conflicts[i].AccountIDs, ",") < strings.Join(conflicts[j].AccountIDs, ",")
+	})
+
+	for i, keys := range hitKeys {
+		if len(keys) != 1 {
+			continue
+		}
+		if _, conflicted := conflictingKeys[keys[0]]; conflicted {
+			continue
+		}
+		applied[i].Annotation = cloneAccountAnnotation(normalized.Accounts[keys[0]])
+	}
+	return applied, conflicts
+}
+
+func annotationKeyKind(key string) string {
+	if index := strings.IndexByte(key, ':'); index >= 0 {
+		return key[:index]
+	}
+	return key
+}
+
+func uniqueNonEmpty(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func LoadAnnotations(path string) (AnnotationState, error) {
@@ -80,18 +221,6 @@ func SaveAnnotations(path string, state AnnotationState) error {
 		return err
 	}
 	return os.Chmod(path, 0600)
-}
-
-func ApplyAnnotations(accounts []AccountState, state AnnotationState) []AccountState {
-	normalized := NormalizeAnnotationState(state)
-	applied := make([]AccountState, len(accounts))
-	for i, account := range accounts {
-		applied[i] = cloneAccountState(account)
-		if annotation, ok := normalized.Accounts[ResolveAnnotationKey(account)]; ok {
-			applied[i].Annotation = cloneAccountAnnotation(annotation)
-		}
-	}
-	return applied
 }
 
 func normalizeTags(tags []string) []string {

@@ -178,9 +178,6 @@ func logSchedulerDecision(store *PluginState, req pluginapi.SchedulerPickRequest
 	if decision.DelegateBuiltin != "" {
 		fields["delegate_builtin"] = decision.DelegateBuiltin
 	}
-	if decision.ActivePoolBypassed {
-		fields["active_pool_bypassed"] = true
-	}
 	if decision.AuthID != "" {
 		event = "scheduler.selected"
 		message = "请求已由插件接管"

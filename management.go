@@ -17,35 +17,98 @@ import (
 
 const managementBasePath = "/plugins/" + PluginID
 
+const pluginGroupManagementRemoved = "plugin_group_management_removed"
+
 var managementRefreshSoon = func() {}
 var managementRefreshOneSoon = func(authID string) {}
 var managementProvisionalRiskChanged = func(bool) {}
 
 type StatusPayload struct {
-	PluginID                      string                   `json:"plugin_id"`
-	GeneratedAt                   time.Time                `json:"generated_at"`
-	Shell                         bool                     `json:"shell,omitempty"`
-	NextAuthID                    string                   `json:"next_auth_id"`
-	MonthlyMode                   MonthlyMode              `json:"monthly_mode"`
-	SelectionStrategy             SelectionStrategy        `json:"selection_strategy"`
-	SelectionStrategyDisplay      string                   `json:"selection_strategy_display"`
-	HandleEnabled                 bool                     `json:"handle_enabled"`
-	ExcludeFreeAccounts           bool                     `json:"exclude_free_accounts"`
-	LastSelected                  string                   `json:"last_selected"`
-	LastReason                    string                   `json:"last_reason"`
-	RefreshActive                 bool                     `json:"refresh_active"`
-	RefreshState                  string                   `json:"refresh_state"`
-	LastCodexActivityText         string                   `json:"last_codex_activity_text,omitempty"`
-	LastAuthScanText              string                   `json:"last_auth_scan_text,omitempty"`
-	CodexAuthCount                int                      `json:"codex_auth_count"`
-	HostSupportsEmergencyDelegate bool                     `json:"host_supports_emergency_delegate"`
-	LastEmergencyResult           *EmergencyDecisionStatus `json:"last_emergency_result,omitempty"`
-	Roster                        RosterLifecyclePayload   `json:"roster"`
-	EmptyState                    EmptyStatePayload        `json:"empty_state,omitempty"`
-	Settings                      SettingsPayload          `json:"settings"`
-	Accounts                      []StatusAccount          `json:"accounts"`
-	Groups                        []StatusGroup            `json:"groups,omitempty"`
-	Logs                          []LogEntry               `json:"logs"`
+	PluginID                      string                       `json:"plugin_id"`
+	GeneratedAt                   time.Time                    `json:"generated_at"`
+	Shell                         bool                         `json:"shell,omitempty"`
+	NextAuthID                    string                       `json:"next_auth_id"`
+	MonthlyMode                   MonthlyMode                  `json:"monthly_mode"`
+	SelectionStrategy             SelectionStrategy            `json:"selection_strategy"`
+	SelectionStrategyDisplay      string                       `json:"selection_strategy_display"`
+	HandleEnabled                 bool                         `json:"handle_enabled"`
+	ExcludeFreeAccounts           bool                         `json:"exclude_free_accounts"`
+	LastSelected                  string                       `json:"last_selected"`
+	LastReason                    string                       `json:"last_reason"`
+	RefreshActive                 bool                         `json:"refresh_active"`
+	RefreshState                  string                       `json:"refresh_state"`
+	LastCodexActivityText         string                       `json:"last_codex_activity_text,omitempty"`
+	LastAuthScanText              string                       `json:"last_auth_scan_text,omitempty"`
+	CodexAuthCount                int                          `json:"codex_auth_count"`
+	HostSupportsEmergencyDelegate bool                         `json:"host_supports_emergency_delegate"`
+	LastEmergencyResult           *EmergencyDecisionStatus     `json:"last_emergency_result,omitempty"`
+	Roster                        RosterLifecyclePayload       `json:"roster"`
+	Inventory                     ManagementInventorySnapshot  `json:"inventory"`
+	EmptyState                    EmptyStatePayload            `json:"empty_state,omitempty"`
+	Settings                      SettingsPayload              `json:"settings"`
+	Accounts                      []StatusAccount              `json:"accounts"`
+	Groups                        []StatusGroup                `json:"groups,omitempty"`
+	GroupWarnings                 []StatusGroupWarning         `json:"group_warnings,omitempty"`
+	GroupReferenceWarnings        []StatusGroupWarning         `json:"group_reference_warnings,omitempty"`
+	IdentityWarnings              []AnnotationIdentityConflict `json:"identity_warnings,omitempty"`
+	Logs                          []LogEntry                   `json:"logs"`
+}
+
+// PublicStatusPayload is the intentionally small unauthenticated Resource
+// contract. Keep this type separate from StatusPayload so a newly added
+// account, quota, log, or host-text field cannot become public by accident.
+type PublicStatusPayload struct {
+	PluginID                      string                `json:"plugin_id"`
+	GeneratedAt                   time.Time             `json:"generated_at"`
+	HandleEnabled                 bool                  `json:"handle_enabled"`
+	RefreshActive                 bool                  `json:"refresh_active"`
+	RefreshState                  string                `json:"refresh_state"`
+	HostSupportsEmergencyDelegate bool                  `json:"host_supports_emergency_delegate"`
+	Settings                      PublicSettingsPayload `json:"settings"`
+	Aggregate                     PublicAggregateStatus `json:"aggregate"`
+	Roster                        PublicRosterSummary   `json:"roster"`
+}
+
+type PublicSettingsPayload struct {
+	HandleEnabled                   bool              `json:"handle_enabled"`
+	ExcludeFreeAccounts             bool              `json:"exclude_free_accounts"`
+	MonthlyMode                     MonthlyMode       `json:"monthly_mode"`
+	SelectionStrategy               SelectionStrategy `json:"selection_strategy"`
+	SelectionStrategyDisplay        string            `json:"selection_strategy_display"`
+	QuotaRefreshInterval            string            `json:"quota_refresh_interval"`
+	StaleAfter                      string            `json:"stale_after"`
+	RefreshActiveWindow             string            `json:"refresh_active_window"`
+	RefreshAfterResetDelay          string            `json:"refresh_after_reset_delay"`
+	RefreshRetryDelays              string            `json:"refresh_retry_delays"`
+	RefreshOnStartup                bool              `json:"refresh_on_startup"`
+	EnableUsageFeedback             bool              `json:"enable_usage_feedback"`
+	EnableResetProbe                bool              `json:"enable_reset_probe"`
+	ProbeOnProvisionalRoster        bool              `json:"probe_on_provisional_roster"`
+	MaxRefreshConcurrency           int               `json:"max_refresh_concurrency"`
+	CircuitFailureThreshold         int               `json:"circuit_failure_threshold"`
+	CircuitOpenDuration             string            `json:"circuit_open_duration"`
+	CircuitHalfOpenSuccessThreshold int               `json:"circuit_half_open_success_threshold"`
+	MaxLogEntries                   int               `json:"max_log_entries"`
+	LogRetention                    string            `json:"log_retention"`
+}
+
+type PublicAggregateStatus struct {
+	AccountCount      int `json:"account_count"`
+	AvailableCount    int `json:"available_count"`
+	UnavailableCount  int `json:"unavailable_count"`
+	QuotaKnownCount   int `json:"quota_known_count"`
+	QuotaMissingCount int `json:"quota_missing_count"`
+}
+
+type PublicRosterSummary struct {
+	Confirmed           bool `json:"confirmed"`
+	Provisional         bool `json:"provisional"`
+	Degraded            bool `json:"degraded"`
+	FailClosed          bool `json:"fail_closed"`
+	WaitingRoster       bool `json:"waiting_roster"`
+	AdmittedAuthCount   int  `json:"admitted_auth_count"`
+	RosterEntryCount    int  `json:"roster_entry_count"`
+	RosterInstanceCount int  `json:"roster_instance_count"`
 }
 
 type ManagementLifecycleSnapshot struct {
@@ -91,6 +154,7 @@ type SettingsPayload struct {
 	HandleEnabled                   bool `json:"handle_enabled"`
 	ExcludeFreeAccounts             bool `json:"exclude_free_accounts"`
 	excludeFreeAccountsPresent      bool
+	ActivePool                      string            `json:"active_pool,omitempty"`
 	MonthlyMode                     MonthlyMode       `json:"monthly_mode"`
 	SelectionStrategy               SelectionStrategy `json:"selection_strategy"`
 	SubscriptionOrder               []string          `json:"subscription_order"`
@@ -201,6 +265,13 @@ type StatusGroup struct {
 	Color string   `json:"color,omitempty"`
 }
 
+type StatusGroupWarning struct {
+	Reason     string `json:"reason"`
+	ID         string `json:"id"`
+	ConflictID string `json:"conflict_id,omitempty"`
+	Name       string `json:"name,omitempty"`
+}
+
 type StatusWindow struct {
 	Kind             WindowKind `json:"kind,omitempty"`
 	Label            string     `json:"label"`
@@ -234,7 +305,11 @@ func RegisterManagement() pluginapi.ManagementRegistrationResponse {
 			{Method: http.MethodGet, Path: managementBasePath + "/annotations", Description: "Read quota annotations."},
 			{Method: http.MethodPut, Path: managementBasePath + "/annotations", Description: "Replace quota annotations."},
 			{Method: http.MethodPatch, Path: managementBasePath + "/annotations/account", Description: "Update one account annotation."},
-			{Method: http.MethodPatch, Path: managementBasePath + "/annotations/group", Description: "Update one group annotation."},
+			{Method: http.MethodPatch, Path: managementBasePath + "/annotations/group", Description: "Legacy group write; returns plugin_group_management_removed."},
+			{Method: http.MethodPost, Path: managementBasePath + "/annotations/groups", Description: "Legacy group write; returns plugin_group_management_removed."},
+			{Method: http.MethodDelete, Path: managementBasePath + "/annotations/groups", Description: "Legacy group write; returns plugin_group_management_removed."},
+			{Method: http.MethodPost, Path: managementBasePath + "/annotations/groups/batch", Description: "Legacy group write; returns plugin_group_management_removed."},
+			{Method: http.MethodPut, Path: managementBasePath + "/active-pool", Description: "Legacy active-pool write; returns plugin_group_management_removed."},
 			{Method: http.MethodPost, Path: managementBasePath + "/credentials/resolve", Description: "Resolve an active credential ambiguity."},
 		},
 	}
@@ -264,6 +339,8 @@ func handleManagementRequest(store *PluginState, req pluginapi.ManagementRequest
 	switch {
 	case method == http.MethodGet && path == "/status":
 		return handleStatusRequest(store, req, now, lifecycle)
+	case method == http.MethodGet && path == "/status-data":
+		return handlePublicStatusDataRequest(store, now)
 	case method == http.MethodGet && path == "/settings":
 		configCommitMu.RLock()
 		response := jsonManagementResponse(http.StatusOK, SettingsFromConfig(store.Config()))
@@ -297,6 +374,14 @@ func handleManagementRequest(store *PluginState, req pluginapi.ManagementRequest
 		return handlePatchAccountAnnotation(store, req, now)
 	case method == http.MethodPatch && path == "/annotations/group":
 		return handlePatchGroupAnnotation(store, req, now)
+	case method == http.MethodPost && path == "/annotations/groups":
+		return handleCreateGroup(store, req, now)
+	case method == http.MethodDelete && path == "/annotations/groups":
+		return handleDeleteGroup(store, req, now)
+	case method == http.MethodPost && path == "/annotations/groups/batch":
+		return handleBatchMembership(store, req, now, lifecycle)
+	case method == http.MethodPut && path == "/active-pool":
+		return handlePutActivePool(store, req, now)
 	case method == http.MethodPost && path == "/credentials/resolve":
 		return handleCredentialResolution(store, req, now, lifecycle)
 	default:
@@ -336,7 +421,7 @@ func isResourcePath(path string) bool {
 func resourceRouteAllowed(method, path string) bool {
 	if method == http.MethodGet {
 		switch path {
-		case "/status":
+		case "/status", "/status-data":
 			return true
 		default:
 			return false
@@ -374,6 +459,9 @@ func SettingsFromConfig(cfg Config) SettingsPayload {
 
 func ConfigFromSettings(base Config, payload SettingsPayload) (Config, error) {
 	cfg := NormalizeConfig(base)
+	if strings.TrimSpace(payload.ActivePool) != "" {
+		return Config{}, jsonError(pluginGroupManagementRemoved)
+	}
 	if payload.MonthlyMode != "" {
 		cfg.MonthlyMode = payload.MonthlyMode
 	}
@@ -499,6 +587,9 @@ func saveSettingsPayload(store *PluginState, payload SettingsPayload) pluginapi.
 }
 
 func saveSettingsPayloadLocked(store *PluginState, payload SettingsPayload) (pluginapi.ManagementResponse, bool, bool) {
+	if strings.TrimSpace(payload.ActivePool) != "" {
+		return pluginGroupManagementRemovedResponse(), false, false
+	}
 	previousRisk := store.Config().ProbeOnProvisionalRoster
 	cfg, err := ConfigFromSettings(store.Config(), payload)
 	if err != nil {
@@ -617,8 +708,11 @@ func buildStatusPayload(snapshot StateSnapshot, ordered []ScheduledAccount, life
 		Settings:                      SettingsFromConfig(snapshot.Config),
 		Accounts:                      make([]StatusAccount, 0, len(ordered)),
 		Groups:                        make([]StatusGroup, 0, len(snapshot.Annotations.Groups)),
+		GroupWarnings:                 groupNameConflictWarnings(snapshot.Annotations.Groups),
+		GroupReferenceWarnings:        groupReferenceWarnings(snapshot.Accounts, snapshot.Annotations.Groups),
 		Logs:                          cloneLogs(snapshot.Logs),
 	}
+	_, payload.IdentityWarnings = ApplyAnnotationsWithConflicts(snapshot.Accounts, snapshot.Annotations)
 	if snapshot.LastEmergencyDecision.Observed {
 		lastEmergencyResult := snapshot.LastEmergencyDecision
 		payload.LastEmergencyResult = &lastEmergencyResult
@@ -880,6 +974,7 @@ func nextStatusAuthID(state StateSnapshot, ordered []ScheduledAccount) string {
 		MonthlyMode:         state.Config.MonthlyMode,
 		SelectionStrategy:   state.Config.SelectionStrategy,
 		SubscriptionRanks:   subscriptionRanks(state.Config.SubscriptionOrder),
+		ActivePool:          state.Config.ActivePool,
 		Accounts:            accounts,
 		ActiveHighestTier:   active,
 		AdmissionObserved:   true,
@@ -1074,33 +1169,65 @@ func handleStatusRequest(store *PluginState, req pluginapi.ManagementRequest, no
 
 func handlePublicStatusDataRequest(store *PluginState, now time.Time) pluginapi.ManagementResponse {
 	payload := buildCurrentStatusPayload(store, now)
-	return jsonManagementResponse(http.StatusOK, sanitizePublicStatusPayload(payload))
+	return jsonManagementResponse(http.StatusOK, buildPublicStatusPayload(payload))
 }
 
-func sanitizePublicStatusPayload(payload StatusPayload) StatusPayload {
-	payload.Shell = false
-	payload.Settings.QuotaEndpoint = ""
-	for i := range payload.Accounts {
-		payload.Accounts[i].LastError = sanitizeResetProbeError(payload.Accounts[i].LastError)
-		for j := range payload.Accounts[i].ResetProbes {
-			payload.Accounts[i].ResetProbes[j].Error = sanitizeResetProbeError(payload.Accounts[i].ResetProbes[j].Error)
+func buildPublicStatusPayload(payload StatusPayload) PublicStatusPayload {
+	settings := payload.Settings
+	public := PublicStatusPayload{
+		PluginID:                      payload.PluginID,
+		GeneratedAt:                   payload.GeneratedAt,
+		HandleEnabled:                 payload.HandleEnabled,
+		RefreshActive:                 payload.RefreshActive,
+		RefreshState:                  payload.RefreshState,
+		HostSupportsEmergencyDelegate: payload.HostSupportsEmergencyDelegate,
+		Settings: PublicSettingsPayload{
+			HandleEnabled:                   settings.HandleEnabled,
+			ExcludeFreeAccounts:             settings.ExcludeFreeAccounts,
+			MonthlyMode:                     settings.MonthlyMode,
+			SelectionStrategy:               settings.SelectionStrategy,
+			SelectionStrategyDisplay:        payload.SelectionStrategyDisplay,
+			QuotaRefreshInterval:            settings.QuotaRefreshInterval,
+			StaleAfter:                      settings.StaleAfter,
+			RefreshActiveWindow:             settings.RefreshActiveWindow,
+			RefreshAfterResetDelay:          settings.RefreshAfterResetDelay,
+			RefreshRetryDelays:              settings.RefreshRetryDelays,
+			RefreshOnStartup:                settings.RefreshOnStartup,
+			EnableUsageFeedback:             settings.EnableUsageFeedback,
+			EnableResetProbe:                settings.EnableResetProbe,
+			ProbeOnProvisionalRoster:        settings.ProbeOnProvisionalRoster,
+			MaxRefreshConcurrency:           settings.MaxRefreshConcurrency,
+			CircuitFailureThreshold:         settings.CircuitFailureThreshold,
+			CircuitOpenDuration:             settings.CircuitOpenDuration,
+			CircuitHalfOpenSuccessThreshold: settings.CircuitHalfOpenSuccessThreshold,
+			MaxLogEntries:                   settings.MaxLogEntries,
+			LogRetention:                    settings.LogRetention,
+		},
+		Roster: PublicRosterSummary{
+			Confirmed:           payload.Roster.Confirmed,
+			Provisional:         payload.Roster.Provisional,
+			Degraded:            payload.Roster.Degraded,
+			FailClosed:          payload.Roster.FailClosed,
+			WaitingRoster:       payload.Roster.WaitingRoster,
+			AdmittedAuthCount:   payload.Roster.AdmittedAuthCount,
+			RosterEntryCount:    payload.Roster.RosterEntryCount,
+			RosterInstanceCount: payload.Roster.RosterInstanceCount,
+		},
+	}
+	for _, account := range payload.Accounts {
+		public.Aggregate.AccountCount++
+		if account.Available {
+			public.Aggregate.AvailableCount++
+		} else {
+			public.Aggregate.UnavailableCount++
+		}
+		if account.FiveHour.Missing && account.LongWindow.Missing {
+			public.Aggregate.QuotaMissingCount++
+		} else {
+			public.Aggregate.QuotaKnownCount++
 		}
 	}
-	for i := range payload.Logs {
-		payload.Logs[i].Message = redactPublicStatusString(payload.Logs[i].Message)
-		for key, value := range payload.Logs[i].Fields {
-			text, ok := value.(string)
-			if !ok {
-				continue
-			}
-			if key == "error" {
-				payload.Logs[i].Fields[key] = sanitizeResetProbeError(text)
-				continue
-			}
-			payload.Logs[i].Fields[key] = redactPublicStatusString(text)
-		}
-	}
-	return payload
+	return public
 }
 
 func buildCurrentStatusPayload(store *PluginState, now time.Time) StatusPayload {
@@ -1131,7 +1258,9 @@ func buildCurrentStatusPayloadWithLifecycle(store *PluginState, now time.Time, l
 		filtered.Accounts = append(filtered.Accounts, account)
 	}
 	ordered := buildOrderedAccounts(syntheticRosterStatusRequest(filtered, lifecycle.Roster), filtered, now, globalTrials)
-	return buildStatusPayload(filtered, ordered, &lifecycle)
+	payload := buildStatusPayload(filtered, ordered, &lifecycle)
+	payload.Inventory = managementInventorySnapshot(lifecycle.Roster, snapshot)
+	return payload
 }
 
 func syntheticRosterStatusRequest(snapshot StateSnapshot, roster ActiveRoster) pluginapi.SchedulerPickRequest {
@@ -1174,6 +1303,9 @@ func handlePutAnnotations(store *PluginState, req pluginapi.ManagementRequest) p
 	if err := json.Unmarshal(req.Body, &state); err != nil {
 		return jsonManagementResponse(http.StatusBadRequest, map[string]string{"error": err.Error()})
 	}
+	if annotationStateContainsPluginGroupData(state) {
+		return pluginGroupManagementRemovedResponse()
+	}
 	state = NormalizeAnnotationState(state)
 	configCommitMu.Lock()
 	defer configCommitMu.Unlock()
@@ -1181,6 +1313,7 @@ func handlePutAnnotations(store *PluginState, req pluginapi.ManagementRequest) p
 		return jsonManagementResponse(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 	store.SetAnnotations(state)
+	republishSchedulerConfig(store, time.Now())
 	return jsonManagementResponse(http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -1188,6 +1321,9 @@ func handlePatchAccountAnnotation(store *PluginState, req pluginapi.ManagementRe
 	var patch annotationPatch
 	if err := json.Unmarshal(req.Body, &patch); err != nil {
 		return jsonManagementResponse(http.StatusBadRequest, map[string]string{"error": err.Error()})
+	}
+	if accountAnnotationPatchContainsGroupField(patch) {
+		return pluginGroupManagementRemovedResponse()
 	}
 	resp := applyAccountAnnotationPatch(store, patch)
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -1197,6 +1333,9 @@ func handlePatchAccountAnnotation(store *PluginState, req pluginapi.ManagementRe
 }
 
 func applyAccountAnnotationPatch(store *PluginState, patch annotationPatch) pluginapi.ManagementResponse {
+	if accountAnnotationPatchContainsGroupField(patch) {
+		return pluginGroupManagementRemovedResponse()
+	}
 	key := patch.accountKey()
 	if key == "" {
 		return jsonManagementResponse(http.StatusBadRequest, map[string]string{"error": "annotation key is required"})
@@ -1232,55 +1371,59 @@ func applyAccountAnnotationPatch(store *PluginState, patch annotationPatch) plug
 		return jsonManagementResponse(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 	store.SetAnnotations(state)
+	republishSchedulerConfig(store, time.Now())
 	return jsonManagementResponse(http.StatusOK, map[string]bool{"ok": true})
 }
 
 func handlePatchGroupAnnotation(store *PluginState, req pluginapi.ManagementRequest, now time.Time) pluginapi.ManagementResponse {
-	var patch annotationPatch
-	if err := json.Unmarshal(req.Body, &patch); err != nil {
-		return jsonManagementResponse(http.StatusBadRequest, map[string]string{"error": err.Error()})
-	}
-	resp := applyGroupAnnotationPatch(store, patch)
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		store.RecordLog("info", "ui.group_saved", "页面保存账号分组", map[string]any{"group_id": patch.ID, "key": patch.Key}, now)
-	}
-	return resp
+	return pluginGroupManagementRemovedResponse()
 }
 
-func applyGroupAnnotationPatch(store *PluginState, patch annotationPatch) pluginapi.ManagementResponse {
-	key := patch.groupKey()
-	if key == "" {
-		return jsonManagementResponse(http.StatusBadRequest, map[string]string{"error": "group key is required"})
-	}
-	configCommitMu.Lock()
-	defer configCommitMu.Unlock()
+func handleCreateGroup(store *PluginState, req pluginapi.ManagementRequest, now time.Time) pluginapi.ManagementResponse {
+	return pluginGroupManagementRemovedResponse()
+}
 
-	state := store.Annotations()
-	annotation := state.Groups[key]
-	if len(patch.Annotation) > 0 {
-		if err := json.Unmarshal(patch.Annotation, &annotation); err != nil {
-			return jsonManagementResponse(http.StatusBadRequest, map[string]string{"error": err.Error()})
+func handleDeleteGroup(store *PluginState, req pluginapi.ManagementRequest, now time.Time) pluginapi.ManagementResponse {
+	return pluginGroupManagementRemovedResponse()
+}
+
+func handleBatchMembership(store *PluginState, req pluginapi.ManagementRequest, now time.Time, lifecycle *ManagementLifecycleSnapshot) pluginapi.ManagementResponse {
+	return pluginGroupManagementRemovedResponse()
+}
+
+func handlePutActivePool(store *PluginState, req pluginapi.ManagementRequest, now time.Time) pluginapi.ManagementResponse {
+	return pluginGroupManagementRemovedResponse()
+}
+
+func pluginGroupManagementRemovedResponse() pluginapi.ManagementResponse {
+	return jsonManagementResponse(http.StatusGone, map[string]string{"error": pluginGroupManagementRemoved})
+}
+
+func accountAnnotationPatchContainsGroupField(patch annotationPatch) bool {
+	if patch.GroupID != nil {
+		return true
+	}
+	if len(patch.Annotation) == 0 {
+		return false
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(patch.Annotation, &fields); err != nil {
+		return false
+	}
+	_, present := fields["group_id"]
+	return present
+}
+
+func annotationStateContainsPluginGroupData(state AnnotationState) bool {
+	if len(state.Groups) > 0 {
+		return true
+	}
+	for _, account := range state.Accounts {
+		if account.GroupID != "" {
+			return true
 		}
 	}
-	if patch.Name != nil {
-		annotation.Name = *patch.Name
-	}
-	if patch.Notes != nil {
-		annotation.Notes = *patch.Notes
-	}
-	if patch.Tags != nil {
-		annotation.Tags = patch.Tags
-	}
-	if patch.Color != nil {
-		annotation.Color = *patch.Color
-	}
-	state.Groups[key] = annotation
-	state = NormalizeAnnotationState(state)
-	if err := persistAnnotationState(store, state); err != nil {
-		return jsonManagementResponse(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-	}
-	store.SetAnnotations(state)
-	return jsonManagementResponse(http.StatusOK, map[string]bool{"ok": true})
+	return false
 }
 
 type annotationPatch struct {
@@ -1403,6 +1546,7 @@ var statusTemplateV2 = template.Must(template.New("status-v2").Funcs(template.Fu
 <label class="field"><span data-i18n="app.language">界面语言</span><select id="localeSelect"><option value="zh-CN">中文</option><option value="en">English</option></select></label>
 <label class="field"><span data-i18n="connection.managementKey">CPA 管理密钥</span><input id="managementKey" type="password" autocomplete="off" spellcheck="false"></label>
 <div class="actions primary-actions"><button id="loadData" type="button" data-i18n="actions.loadData">加载数据</button><button id="refreshQuota" type="button" class="secondary" data-i18n="actions.refreshQuota" hidden>刷新额度</button></div>
+<div id="publicStatusSummary" class="notice staticHint" aria-live="polite">正在加载安全配置和聚合状态…</div>
 <div class="notice staticHint" data-i18n="connection.backgroundHint">只要调度器启动了，它就会在后台自动运行，无需保持页面开启。</div>
 <div class="warning" id="resetProbeWarning" hidden><strong data-i18n="resetProbe.warningTitle">自动激活新的额度周期默认关闭</strong><span data-i18n="resetProbe.warningBody">开启后，调度器会在额度重置时间已到但新周期尚未生成时，发送一次极小的 Codex 请求尝试激活新周期。</span></div>
 <details class="section collapsible" id="settingsPanel" hidden><summary><span class="summary-toggle" aria-hidden="true">&gt;</span><span class="summary-text"><span class="summary-title" data-i18n="settings.title">调度设置</span><span class="summary-subtitle" data-i18n="settings.summary">默认配置已经都设置好了，正常情况下不需要手动设置。</span></span></summary><div class="collapsible-body">
@@ -1435,19 +1579,108 @@ var statusTemplateV2 = template.Must(template.New("status-v2").Funcs(template.Fu
 <div class="warning" id="rosterLifecycleWarning" hidden><strong id="rosterLifecycleTitle">Roster lifecycle</strong><span id="rosterLifecycleBody"></span></div>
 <div class="toolbar"><div><h2 data-i18n="queue.title">账号队列</h2><p data-i18n="queue.description">账号卡片按当前调度优先级排序。第一个可用账号就是下一次 Codex 请求会优先选择的账号。</p></div><div class="metrics"><span class="metric"><span data-i18n="metrics.nextAccount">下一账号</span>：<code id="metricNextAuthID">{{if .NextAuthID}}{{.NextAuthID}}{{else}}暂无{{end}}</code></span><span class="metric">Strategy：<code id="metricSelectionStrategy">{{if .SelectionStrategy}}{{.SelectionStrategy}}{{else}}legacy{{end}}</code></span><span class="metric">Monthly：<code id="metricMonthlyMode">{{if eq .MonthlyMode "priority"}}优先使用{{else}}按到期时间{{end}}</code></span><span class="metric"><span data-i18n="metrics.lastSelected">最近选择</span>：<code id="metricLastSelected">{{if .LastSelected}}{{.LastSelected}}{{else}}暂无{{end}}</code></span><span class="metric"><span data-i18n="metrics.emergencyFallback">全局应急 Provider 出口</span>：<code id="metricEmergencyFallback">暂无</code></span></div></div>
 <section class="queue" aria-label="账号卡片">{{range .Accounts}}<article class="card {{if and $.NextAuthID (eq $.NextAuthID .AuthID)}}next{{end}}" data-auth-id="{{.AuthID}}">
-<div class="cardTop"><div class="identity"><div class="titleLine"><span class="title">{{if .Alias}}{{.Alias}}{{else}}{{.AuthID}}{{end}}</span>{{if .Group}}<span class="groupPill">{{.Group}}</span>{{end}}</div><div class="sub"><code>{{.AuthID}}</code></div>{{if .Tags}}<div class="metaLine">{{range .Tags}}<span class="chip">{{.}}</span>{{end}}</div>{{end}}</div><span class="rank">#{{.Rank}}</span></div>
+<div class="cardTop"><div class="identity"><div class="titleLine"><span class="title">{{if .Alias}}{{.Alias}}{{else}}{{.AuthID}}{{end}}</span></div><div class="sub"><code>{{.AuthID}}</code></div>{{if .Tags}}<div class="metaLine">{{range .Tags}}<span class="chip">{{.}}</span>{{end}}</div>{{end}}</div><span class="rank">#{{.Rank}}</span></div>
 <div class="badges">{{if and $.NextAuthID (eq $.NextAuthID .AuthID)}}<span class="badge next">下一优先</span>{{end}}{{if .Available}}<span class="badge ok">可用</span>{{else}}<span class="badge no">{{.UnavailableReason}}</span>{{end}}<span class="badge">{{if eq .Family "weekly"}}Weekly{{else if eq .Family "monthly"}}Monthly{{else}}未知类型{{end}}</span><span class="badge">订阅：{{if .PlanType}}{{.PlanType}}{{if .SubscriptionRank}} (rank {{.SubscriptionRank}}){{end}}{{else}}未知{{end}}</span><span class="badge">CPA 优先级 {{.CPAPriority}}</span><span class="badge">插件优先级 {{.SchedulerPriority}}</span><span class="badge">主动选择资格：{{.ActiveSelectionEligibility}}</span><span class="badge">熔断：{{.Circuit.Label}}</span></div>
 <div class="quotaList">{{if not .FiveHour.Missing}}<div class="quota-row"><div class="quota-head"><span class="quota-title">{{.FiveHour.Label}}</span><span>{{.FiveHour.DisplayText}}</span><span class="quota-reset">5 小时重置：<span class="localTime" data-time="{{.FiveHour.ResetText}}">{{.FiveHour.ResetText}}</span></span></div><div class="quota-bar"><div class="quota-fill {{if .FiveHour.Exhausted}}danger{{else if le .FiveHour.RemainingPercent 20.0}}warn{{end}}" style="width:{{printf "%.0f" .FiveHour.RemainingPercent}}%"></div></div></div>{{end}}<div class="quota-row"><div class="quota-head"><span class="quota-title">{{.LongWindow.Label}}</span><span>{{.LongWindow.DisplayText}}</span>{{if not .LongWindow.Missing}}<span class="quota-reset">长额度重置：<span class="localTime" data-time="{{.LongWindow.ResetText}}">{{.LongWindow.ResetText}}</span></span>{{end}}</div><div class="quota-bar"><div class="quota-fill {{if .LongWindow.Exhausted}}danger{{else if le .LongWindow.RemainingPercent 20.0}}warn{{end}}" style="width:{{printf "%.0f" .LongWindow.RemainingPercent}}%"></div></div></div></div>
 <div class="kv"><span>策略值</span><span>{{if .StrategyKnown}}{{.StrategyValue}}{{else}}未知{{end}}</span><span>瓶颈配额</span><span>{{if .BottleneckQuota.Known}}{{printf "%.1f%%" .BottleneckQuota.Remaining}}{{else}}未知{{end}}</span><span>订阅到期</span><span>{{if .SubscriptionExpiresText}}<span class="localTime" data-time="{{.SubscriptionExpiresText}}">{{.SubscriptionExpiresText}}</span>{{else}}未知{{end}}</span><span>缓存时间</span><span>{{if .CacheAge}}{{.CacheAge}}{{else}}暂无{{end}}</span><span>熔断计数</span><span>失败 {{.Circuit.FailureCount}} / 成功 {{.Circuit.SuccessCount}}{{if .Circuit.NextProbeText}}，半开 <span class="localTime" data-time="{{.Circuit.NextProbeText}}">{{.Circuit.NextProbeText}}</span>{{end}}</span><span>主动重置</span><span>{{if .ResetCreditsAvailableCount}}{{.ResetCreditsAvailableCount}} 次{{else}}暂无{{end}}{{if .ResetCreditsTotalEarnedCount}} / 累计 {{.ResetCreditsTotalEarnedCount}} 次{{end}}{{range .ResetCredits}}；{{if .Status}}{{.Status}} {{end}}有效期 <span class="localTime" data-time="{{.ExpiresAt}}">{{.ExpiresAt}}</span>{{end}}</span></div>
-{{if or .Notes .GroupNotes}}<div class="noteBlock">{{if .Notes}}<div>账号备注：{{.Notes}}</div>{{end}}{{if .GroupNotes}}<div>分组备注：{{.GroupNotes}}</div>{{end}}</div>{{end}}
+{{if .Notes}}<div class="noteBlock"><div>账号备注：{{.Notes}}</div></div>{{end}}
 <div class="cardActions"><button type="button" class="ghost refreshOne" data-auth-id="{{.AuthID}}">刷新额度</button><button type="button" class="secondary openEdit" data-auth-id="{{.AuthID}}">编辑</button></div>
 </article>{{else}}<div class="empty">暂无账号数据。等待额度刷新后，这里会显示账号卡片。</div>{{end}}</section>
 <section class="logs"><div class="logsHeader"><h2 data-i18n="logs.title">调度日志</h2><div class="actions"><button id="refreshLogs" type="button" class="ghost" data-i18n="actions.refreshLogs">刷新日志</button><button id="exportLogs" type="button" class="ghost" data-i18n="actions.exportLogs">导出日志</button></div></div><div id="logList" class="logList"></div></section>
 </main>
 </div>
-<dialog id="editDialog"><form method="dialog" class="dialogBody"><div class="dialogHead"><div><h2 data-i18n="edit.title">编辑账号</h2><p id="editAuthID"></p></div><button type="button" id="closeDialog" class="ghost" data-i18n="actions.close">关闭</button></div><div class="dialogGrid"><label class="field"><span data-i18n="edit.alias">别名</span><input id="editAlias"></label><label class="field"><span data-i18n="account.schedulerPriority">插件优先级</span><input id="editSchedulerPriority" type="number" step="1" value="0"></label><label class="field"><span data-i18n="edit.groupID">分组 ID</span><input id="editGroupID" placeholder="team-a"></label><label class="field"><span data-i18n="edit.groupName">分组名称</span><input id="editGroupName"></label><label class="field"><span data-i18n="edit.tags">标签</span><input id="editTags" placeholder="team, paid"></label><label class="field wide"><span data-i18n="edit.notes">账号备注</span><textarea id="editNotes"></textarea></label><label class="field wide"><span data-i18n="edit.groupNotes">分组备注</span><textarea id="editGroupNotes"></textarea></label></div><div class="dialogActions"><button type="button" id="saveAccount" class="secondary" data-i18n="actions.saveAccount">保存账号</button><button type="button" id="cancelEdit" class="ghost" data-i18n="actions.cancel">取消</button></div></form></dialog>
+<dialog id="editDialog"><form method="dialog" class="dialogBody"><div class="dialogHead"><div><h2 data-i18n="edit.title">编辑账号</h2><p id="editAuthID"></p></div><button type="button" id="closeDialog" class="ghost" data-i18n="actions.close">关闭</button></div><div class="dialogGrid"><label class="field"><span data-i18n="edit.alias">别名</span><input id="editAlias"></label><label class="field"><span data-i18n="account.schedulerPriority">插件优先级</span><input id="editSchedulerPriority" type="number" step="1" value="0"></label><label class="field"><span data-i18n="edit.tags">标签</span><input id="editTags" placeholder="team, paid"></label><label class="field wide"><span data-i18n="edit.notes">账号备注</span><textarea id="editNotes"></textarea></label></div><div class="dialogActions"><button type="button" id="saveAccount" class="secondary" data-i18n="actions.saveAccount">保存账号</button><button type="button" id="cancelEdit" class="ghost" data-i18n="actions.cancel">取消</button></div></form></dialog>
+{{if false}}<script data-purpose="inventory-client-logic">
+const INVENTORY_SEARCH_FIELDS=['email','auth_id','alias','group_id','group_name','tags'];
+const INVENTORY_FACET_KEYS=['plan_or_credential_type','scheduling_eligibility','account_status','quota_status','tags','view_group'];
+const INVENTORY_FACET_LABELS={
+  plan_or_credential_type:{API_KEY:{'zh-CN':'API Key 凭据','en':'API Key credential'},unknown:{'zh-CN':'未知套餐','en':'Unknown plan'}},
+  scheduling_eligibility:{schedulable:{'zh-CN':'可调度','en':'Schedulable'},disabled:{'zh-CN':'已禁用','en':'Disabled'},unavailable:{'zh-CN':'宿主不可用','en':'Unavailable'},auth_failure:{'zh-CN':'认证失败','en':'Auth failure'},api_key_credential:{'zh-CN':'API Key 凭据','en':'API Key credential'},not_highest_priority_tier:{'zh-CN':'非最高 CPA 优先级','en':'Not highest CPA tier'},outside_active_pool:{'zh-CN':'活动池外','en':'Outside active pool'},free_excluded:{'zh-CN':'Free 被排除','en':'Free excluded'},unknown_plan:{'zh-CN':'未知套餐','en':'Unknown plan'},quota_missing:{'zh-CN':'额度缺失','en':'Quota missing'},identity_conflict:{'zh-CN':'身份冲突','en':'Identity conflict'},group_reference_unavailable:{'zh-CN':'未定义分组','en':'Undefined group'}},
+  account_status:{active:{'zh-CN':'活跃','en':'Active'},disabled:{'zh-CN':'已禁用','en':'Disabled'},unavailable:{'zh-CN':'不可用','en':'Unavailable'},error:{'zh-CN':'异常','en':'Error'},failed:{'zh-CN':'失败','en':'Failed'},auth_failure:{'zh-CN':'认证失败','en':'Auth failure'}},
+  quota_status:{known:{'zh-CN':'已知','en':'Known'},missing:{'zh-CN':'暂无数据','en':'Missing'},stale:{'zh-CN':'陈旧','en':'Stale'},exhausted:{'zh-CN':'已耗尽','en':'Exhausted'}},
+  view_group:{ungrouped:{'zh-CN':'未分组','en':'Ungrouped'}}
+};
+function inventoryNormalize(value){return String(value==null?'':value).toLowerCase()}
+function inventorySearchText(row){return INVENTORY_SEARCH_FIELDS.map(function(field){return inventoryNormalize(row[field])}).join(' ')}
+function inventoryRowHasFacet(row,facet,value){
+  if(facet==='tags')return (row.tags||[]).some(function(tag){return inventoryNormalize(tag)===inventoryNormalize(value)});
+  return inventoryNormalize(row[facet])===inventoryNormalize(value);
+}
+function inventoryFilterRows(rows,search,facets){
+  const query=inventoryNormalize(search).trim();
+  return (rows||[]).filter(function(row){
+    if(query&&!inventorySearchText(row).includes(query))return false;
+    const selections=facets||{};
+    for(const facet of Object.keys(selections)){
+      const selected=selections[facet]||[];
+      if(!selected.length)continue;
+      if(!selected.some(function(value){return inventoryRowHasFacet(row,facet,value)}))return false;
+    }
+    return true;
+  });
+}
+function inventoryFacetValues(rows,facet){
+  const values=[];const seen=new Set();
+  for(const row of rows){
+    const list=facet==='tags'?(row.tags||[]):[row[facet]];
+    for(const raw of list){
+      const value=String(raw==null?'':raw);
+      if(!seen.has(value)){seen.add(value);values.push(value)}
+    }
+  }
+  return values.sort();
+}
+function inventoryFacetCounts(rows,search,facets,facetName){
+  const others={};
+  for(const key of Object.keys(facets||{})){if(key!==facetName)others[key]=facets[key]}
+  const base=inventoryFilterRows(rows,search,others);
+  const counts={};
+  for(const value of inventoryFacetValues(base,facetName)){
+    counts[value]=base.filter(function(row){return inventoryRowHasFacet(row,facetName,value)}).length;
+  }
+  return counts;
+}
+function inventoryInPool(row,pool){
+  if(pool==='all'||!pool)return true;
+  if(pool==='ungrouped')return !String(row.group_id||'').trim();
+  if(String(pool).startsWith('group:'))return row.group_id===String(pool).slice(6);
+  return false;
+}
+function inventoryPoolMetrics(rows,pool){
+  const members=rows.filter(function(row){return inventoryInPool(row,pool)});
+  const highest=members.filter(function(row){return row.scheduling_reason!=='not_highest_priority_tier'});
+  const schedulable=highest.filter(function(row){return row.scheduling_reason==='schedulable'||row.scheduling_reason==='outside_active_pool'});
+  return {inventory:members.length,highest_tier:highest.length,schedulable:schedulable.length,strict_failure_risk:schedulable.length===0};
+}
+function inventoryFacetLabel(facet,value,locale){
+  const table=INVENTORY_FACET_LABELS[facet];
+  const loc=locale==='en'?'en':'zh-CN';
+  if(table&&table[value]&&table[value][loc]!==undefined)return table[value][loc];
+  if(facet==='view_group'&&value&&value!=='ungrouped')return loc==='en'?value+' (undefined group)':value+'（未定义分组）';
+  return String(value);
+}
+function inventoryCriteriaEqual(a,b){
+  if((a.search||'')!==(b.search||''))return false;
+  const af=a.facets||{};const bf=b.facets||{};
+  const keys=new Set(Object.keys(af).concat(Object.keys(bf)));
+  for(const key of keys){
+    const left=af[key]||[];const right=bf[key]||[];
+    if(left.length!==right.length)return false;
+    for(const value of left){if(!right.includes(value))return false}
+  }
+  return true;
+}
+function inventorySelectionAfterCriteriaChange(selected,previous,next){
+  return inventoryCriteriaEqual(previous,next)?selected:[];
+}
+function inventoryNoticeState(inventory,warnings){
+  const entries=inventory&&inventory.entries||[];
+  return {empty:!entries.length,stale:(inventory&&inventory.state)==='inventory_stale',conflict:!!(warnings&&warnings.length)};
+}
+</script>{{end}}
 <script>
 let STATUS={{json .}};
+let PUBLIC_STATUS=null;
 const MANAGEMENT_BASE='/v0/management/plugins/codex-quota-scheduler';
 const LOCALE_STORAGE_KEY='codex-quota-scheduler-locale-v1';
 const TRANSLATIONS={
@@ -1460,6 +1693,16 @@ const TRANSLATIONS={
     'logs.title':'Scheduler Logs','logs.empty':'No logs yet. Send a request or refresh quota manually to show records here.',
     'edit.title':'Edit Account','edit.alias':'Alias','account.schedulerPriority':'Plugin priority','edit.groupID':'Group ID','edit.groupName':'Group name','edit.tags':'Tags','edit.notes':'Account notes','edit.groupNotes':'Group notes',
     'notice.settingsSaved':'Settings saved.','notice.statusLoaded':'Current settings loaded. Review them, then save again.','notice.refreshRequested':'Background quota refresh requested.','notice.accountSaved':'Account card saved.','notice.refreshOneRequested':'Quota refresh requested for this account.','notice.configExported':'Configuration exported.','notice.logsExported':'Logs exported.','notice.configImported':'Configuration imported.','error.requestFailed':'Request failed: {status}','error.managementKeyRequired':'CPA management key is required','error.schedulerPriorityInteger':'Plugin priority must be a safe integer.',
+    'inventory.title':'Full Inventory','inventory.description':'Search, filter, and assign all Codex auth accounts to groups; the active pool defines the production scheduling scope.','inventory.search':'Search','inventory.viewGroup':'View group','inventory.activePool':'Active pool','inventory.previewPool':'Preview active pool','inventory.viewGroupAll':'All groups',
+    'inventory.facet.plan':'Plan / credential type','inventory.facet.eligibility':'Scheduling eligibility','inventory.facet.status':'Account status','inventory.facet.quota':'Quota status','inventory.facet.tags':'Tags','inventory.facet.viewGroup':'View group',
+    'inventory.column.auth':'Auth ID','inventory.column.email':'Email','inventory.column.alias':'Alias','inventory.column.group':'Group','inventory.column.plan':'Plan / credential','inventory.column.eligibility':'Eligibility','inventory.column.status':'Status','inventory.column.quota':'Quota','inventory.column.tags':'Tags',
+    'inventory.bulk.target':'Target group','inventory.bulk.open':'Bulk group','inventory.bulk.title':'Confirm bulk grouping','inventory.bulk.summary':'One atomic request will apply to all selected accounts.','inventory.bulk.confirm':'Confirm grouping','inventory.bulk.selected':'{count} accounts selected','inventory.bulk.source':'Source group: {group}','inventory.bulk.multiple':'multiple groups',
+    'inventory.pool.title':'Confirm active pool switch','inventory.pool.summary':'After switching, production scheduling is strictly limited to this pool.','inventory.pool.confirm':'Confirm switch','inventory.pool.all':'All accounts','inventory.pool.ungrouped':'Ungrouped',
+    'inventory.pool.metric.inventory':'Inventory members: {count}','inventory.pool.metric.highestTier':'Highest-tier members: {count}','inventory.pool.metric.schedulable':'Schedulable: {count}','inventory.pool.metric.strictFailureRisk':'Strict failure risk: yes','inventory.pool.metric.noStrictFailureRisk':'Strict failure risk: no',
+    'inventory.group.ungrouped':'Ungrouped',
+    'inventory.notice.empty':'Waiting for the complete Codex inventory to sync.','inventory.notice.stale':'Inventory is stale; showing the last confirmed snapshot.','inventory.notice.conflict':'Identity or group reference conflicts found; resolve them before bulk operations.',
+    'inventory.empty.noResults':'No inventory accounts match the current search and filters.',
+    'notice.inventoryBulkApplied':'Bulk grouping applied.','notice.inventoryPoolApplied':'Active pool switched.',
     'log.ui.refresh_requested':'UI requested quota refresh','log.ui.settings_saved':'UI saved scheduler settings','log.ui.refresh_one_requested':'UI requested one account quota refresh','log.ui.config_exported':'UI exported plugin configuration','log.ui.config_imported':'UI imported plugin configuration','log.ui.account_saved':'UI saved account card','log.ui.group_saved':'UI saved account group','log.scheduler.selected':'Request handled by plugin'
   },
   'zh-CN':{
@@ -1471,6 +1714,16 @@ const TRANSLATIONS={
     'logs.title':'调度日志','logs.empty':'暂无日志。发起请求或手动刷新额度后，这里会显示记录。',
     'edit.title':'编辑账号','edit.alias':'别名','account.schedulerPriority':'插件优先级','edit.groupID':'分组 ID','edit.groupName':'分组名称','edit.tags':'标签','edit.notes':'账号备注','edit.groupNotes':'分组备注',
     'notice.settingsSaved':'设置已保存，页面内容会自动更新。','notice.statusLoaded':'已加载当前设置。请确认后再次保存。','notice.refreshRequested':'已请求后台刷新额度，页面内容会自动更新。','notice.accountSaved':'账号卡片已保存，页面内容会自动更新。','notice.refreshOneRequested':'已请求刷新该账号额度，页面内容会自动更新。','notice.configExported':'配置已导出。','notice.logsExported':'日志已导出。','notice.configImported':'配置已导入，页面内容会自动更新。','error.requestFailed':'请求失败：{status}','error.managementKeyRequired':'需要填写 CPA 管理密钥','error.schedulerPriorityInteger':'插件优先级必须是安全整数。'
+    ,'inventory.title':'完整库存','inventory.description':'搜索、筛选并批量归组所有 Codex 认证账号；活动池决定生产调度范围。','inventory.search':'搜索','inventory.viewGroup':'查看分组','inventory.activePool':'活动池','inventory.previewPool':'预览活动池','inventory.viewGroupAll':'全部分组'
+    ,'inventory.facet.plan':'套餐/凭据类型','inventory.facet.eligibility':'调度资格','inventory.facet.status':'账号状态','inventory.facet.quota':'额度状态','inventory.facet.tags':'标签','inventory.facet.viewGroup':'查看分组'
+    ,'inventory.column.auth':'Auth ID','inventory.column.email':'邮箱','inventory.column.alias':'别名','inventory.column.group':'分组','inventory.column.plan':'套餐/凭据','inventory.column.eligibility':'资格','inventory.column.status':'状态','inventory.column.quota':'额度','inventory.column.tags':'标签'
+    ,'inventory.bulk.target':'目标分组','inventory.bulk.open':'批量归组','inventory.bulk.title':'确认批量归组','inventory.bulk.summary':'一次原子请求将应用到所有选中账号。','inventory.bulk.confirm':'确认归组','inventory.bulk.selected':'已选 {count} 个账号','inventory.bulk.source':'来源分组：{group}','inventory.bulk.multiple':'多个分组'
+    ,'inventory.pool.title':'确认切换活动池','inventory.pool.summary':'切换后生产调度将严格限制在该池内。','inventory.pool.confirm':'确认切换','inventory.pool.all':'全部账号','inventory.pool.ungrouped':'未分组'
+    ,'inventory.pool.metric.inventory':'库存成员：{count}','inventory.pool.metric.highestTier':'最高 tier 成员：{count}','inventory.pool.metric.schedulable':'可调度：{count}','inventory.pool.metric.strictFailureRisk':'严格失败风险：是','inventory.pool.metric.noStrictFailureRisk':'严格失败风险：否'
+    ,'inventory.group.ungrouped':'未分组'
+    ,'inventory.notice.empty':'等待完整 Codex 库存同步。','inventory.notice.stale':'库存已陈旧，展示最后一次确认快照。','inventory.notice.conflict':'发现身份或分组引用冲突，请先处理后执行批量操作。'
+    ,'inventory.empty.noResults':'没有与当前搜索和筛选匹配的库存账号。'
+    ,'notice.inventoryBulkApplied':'批量归组已生效。','notice.inventoryPoolApplied':'活动池已切换。'
   }
 };
 const notice=document.getElementById('notice');
@@ -1485,6 +1738,7 @@ let statusLoaded=!STATUS.shell;
 let settingsDirty=false;
 let settingsInitialized=!STATUS.shell;
 let statusPollID=0;
+let publicStatusLoaded=false;
 const INLINE_TRANSLATIONS=[
   ['下一优先','Next preferred'],['可用','Available'],['未知类型','unknown type'],['CPA 优先级','CPA priority'],['插件优先级','Plugin priority'],['熔断：','Circuit: '],['熔断','Circuit'],['全开','closed'],['半开','half-open'],
   ['按到期时间','by expiry time'],['优先使用','prefer Monthly'],['已启用','enabled'],['已关闭','disabled'],['暂无数据','No data'],['暂无','None'],['已用完','Used up'],
@@ -1522,7 +1776,7 @@ function labelDueReason(reason){return labelFrom(DUE_REASON_LABELS,reason,reason
 function labelUnavailableReason(reason){return labelFrom(UNAVAILABLE_REASON_LABELS,reason,reason||'不可用')}
 function translateInlineText(raw){let text=String(raw||'');if(currentLocale!=='en')return text;for(const pair of INLINE_TRANSLATIONS){text=text.split(pair[0]).join(pair[1])}return text}
 function applyInlineTranslations(){const nodes=document.querySelectorAll('.badge,.quota-title,.quota-reset,.kv span,.cardActions button,.empty,.empty strong,.empty div');for(const node of nodes){if(node.children.length>0)continue;if(!node.dataset.rawText)node.dataset.rawText=node.textContent;node.textContent=translateInlineText(node.dataset.rawText)}formatLocalTimes()}
-function applyLocale(){document.documentElement.lang=currentLocale;document.title=t('app.title');localeSelect.value=currentLocale;for(const node of document.querySelectorAll('[data-i18n]')){node.textContent=t(node.dataset.i18n)}renderMetrics();applyInlineTranslations();renderLogs(STATUS.logs||[])}
+function applyLocale(){document.documentElement.lang=currentLocale;document.title=t('app.title');localeSelect.value=currentLocale;for(const node of document.querySelectorAll('[data-i18n]')){node.textContent=t(node.dataset.i18n)}renderMetrics();applyInlineTranslations();if(statusLoaded)renderInventory();renderLogs(STATUS.logs||[])}
 function changeLocale(locale){currentLocale=normalizeLocale(locale);try{window.localStorage.setItem(LOCALE_STORAGE_KEY,currentLocale)}catch(error){}applyLocale()}
 function showNotice(text,isError){notice.hidden=false;notice.textContent=text;notice.className='notice'+(isError?' error':'')}
 function rebuildDerivedState(){accountsByID.clear();groupsByID.clear();for(const account of STATUS.accounts||[]){if(account.auth_id)accountsByID.set(account.auth_id,account);if(account.group_id)groupsByID.set(account.group_id,{name:account.group||'',notes:account.group_notes||''})}for(const group of STATUS.groups||[]){if(group.id)groupsByID.set(group.id,{name:group.name||'',notes:group.notes||''})}}
@@ -1531,7 +1785,25 @@ function hasManagementKey(){const input=document.getElementById('managementKey')
 function settingsFocusedOrDirty(){const panel=document.getElementById('settingsPanel');return settingsDirty||(panel&&panel.contains(document.activeElement))}
 function updateResetProbeWarning(){const warning=document.getElementById('resetProbeWarning');if(warning)warning.hidden=!(statusLoaded&&STATUS.settings&&STATUS.settings.enable_reset_probe!==true)}
 function updateProtectedVisibility(){const loaded=statusLoaded;const show=(id,visible)=>{const item=document.getElementById(id);if(item)item.hidden=!visible};show('settingsPanel',loaded);show('protectedMain',loaded);show('refreshQuota',loaded);show('loadData',!loaded);updateResetProbeWarning()}
+function renderPublicStatus(){const node=document.getElementById('publicStatusSummary');if(!node||!PUBLIC_STATUS)return;const settings=PUBLIC_STATUS.settings||{};const aggregate=PUBLIC_STATUS.aggregate||{};const enabled=settings.handle_enabled!==false?'已启用':'已停用';const strategy=settings.selection_strategy_display||settings.selection_strategy||'legacy';node.textContent='安全配置：调度'+enabled+'；策略 '+strategy+'；月度模式 '+(settings.monthly_mode||'expiry_order')+'。聚合状态：账号 '+(aggregate.account_count||0)+'，可用 '+(aggregate.available_count||0)+'，不可用 '+(aggregate.unavailable_count||0)+'。';}
 function renderRosterLifecycle(){const warning=document.getElementById('rosterLifecycleWarning');const title=document.getElementById('rosterLifecycleTitle');const body=document.getElementById('rosterLifecycleBody');if(!warning||!title||!body)return;const roster=STATUS.roster||{};const messages=[roster.warning,roster.risk_warning].filter(Boolean);warning.hidden=messages.length===0;title.textContent=[roster.capability,roster.health].filter(Boolean).join(' / ')||'Roster lifecycle';body.textContent=messages.join(' ')}
+let inventoryFacetSelection={};
+let inventorySelectedIDs=new Set();
+let inventoryCriteria={search:'',facets:{}};
+let inventoryActivePoolCandidate='';
+function inventoryRowsFromStatus(){const entries=(STATUS.inventory&&STATUS.inventory.entries)||[];const groupNames=new Map();for(const group of STATUS.groups||[]){groupNames.set(group.id,group.name||group.id)}return entries.map(function(entry){const groupID=entry.group_id||'';const groupName=groupNames.get(groupID)||'';let viewGroup='ungrouped';if(groupID){viewGroup=groupName||groupID}const kind=(entry.credential_kind||'').toUpperCase();let planOrCredential='unknown';if(kind==='API_KEY'){planOrCredential='API_KEY'}else if(entry.plan_type){planOrCredential=entry.plan_type}return{email:entry.email||'',auth_id:entry.auth_id||'',alias:entry.alias||'',group_id:groupID,group_name:groupName,tags:entry.tags||[],plan_or_credential_type:planOrCredential,scheduling_eligibility:entry.scheduling_reason||'',account_status:entry.status||'',quota_status:entry.quota_state||'missing',view_group:viewGroup,scheduling_reason:entry.scheduling_reason||''}})}
+function inventoryDefinedViewGroupValues(){return new Set((STATUS.groups||[]).map(g=>g.name||g.id))}
+function inventoryFacetLabelForDisplay(facet,value){if(facet==='view_group'&&value&&value!=='ungrouped'&&!inventoryDefinedViewGroupValues().has(value)){return currentLocale==='en'?value+' (undefined group)':value+'（未定义分组）'}return inventoryFacetLabel(facet,value,currentLocale)}
+function collectInventoryFacetSelection(){const out={};for(const box of document.querySelectorAll('[data-purpose="inventory-facet-input"]')){if(!box.checked)continue;const facet=box.dataset.facet;const value=box.dataset.value;if(!out[facet])out[facet]=[];if(!out[facet].includes(value))out[facet].push(value)}const viewSelect=document.querySelector('[data-purpose="view-group-filter"]');if(viewSelect&&viewSelect.value){out.view_group=[viewSelect.value]}return out}
+function renderInventoryFacets(rows,search,facets){for(const facet of INVENTORY_FACET_KEYS){const container=document.getElementById('facet-'+facet.replaceAll('_','-'));if(!container)continue;container.replaceChildren();const values=inventoryFacetValues(rows,facet);const counts=inventoryFacetCounts(rows,search,facets,facet);const selected=facets[facet]||[];for(const value of values){const label=document.createElement('label');label.className='facetOption';const box=document.createElement('input');box.type='checkbox';box.dataset.purpose='inventory-facet-input';box.dataset.facet=facet;box.dataset.value=value;box.checked=selected.includes(value);box.addEventListener('change',()=>{renderInventory()});const text=document.createElement('span');text.textContent=inventoryFacetLabelForDisplay(facet,value)+' ('+counts[value]+')';label.append(box,text);container.append(label)}}}
+function renderInventoryRows(rows,search,facets){const tbody=document.getElementById('inventoryRows');const empty=document.getElementById('inventoryEmpty');if(!tbody)return;const visible=inventoryFilterRows(rows,search,facets);tbody.replaceChildren();const selectAll=document.querySelector('[data-purpose="inventory-item-selection"]');if(visible.length===0){if(empty){empty.hidden=false;empty.textContent=t('inventory.empty.noResults')}if(selectAll){selectAll.checked=false;selectAll.indeterminate=false}return}if(empty)empty.hidden=true;let allVisibleSelected=true;for(const row of visible){const tr=document.createElement('tr');tr.dataset.authId=row.auth_id;const tdSel=document.createElement('td');const box=document.createElement('input');box.type='checkbox';box.dataset.authId=row.auth_id;box.dataset.selectionScope='inventory-row';box.checked=inventorySelectedIDs.has(row.auth_id);if(!box.checked)allVisibleSelected=false;box.addEventListener('change',()=>{renderInventory()});tdSel.append(box);tr.append(tdSel);const cells=[row.auth_id,row.email,row.alias,inventoryFacetLabelForDisplay('view_group',row.view_group),inventoryFacetLabelForDisplay('plan_or_credential_type',row.plan_or_credential_type),inventoryFacetLabelForDisplay('scheduling_eligibility',row.scheduling_eligibility),inventoryFacetLabelForDisplay('account_status',row.account_status),inventoryFacetLabelForDisplay('quota_status',row.quota_status),(row.tags||[]).join(', ')];for(const cell of cells){const td=document.createElement('td');td.textContent=cell;tr.append(td)}tbody.append(tr)}if(selectAll){selectAll.checked=allVisibleSelected;selectAll.indeterminate=inventorySelectedIDs.size>0&&!allVisibleSelected}}
+function inventorySourceGroupLabel(rows){const groups=new Set(rows.filter(r=>inventorySelectedIDs.has(r.auth_id)).map(r=>r.group_name||r.view_group));if(groups.size===0)return t('inventory.group.ungrouped');if(groups.size===1)return [...groups][0];return t('inventory.bulk.multiple')}
+function renderInventoryBulkBar(rows,search,facets){const bar=document.getElementById('inventoryBulkBar');if(!bar)return;const visible=inventoryFilterRows(rows,search,facets);const selectedIDs=visible.filter(r=>inventorySelectedIDs.has(r.auth_id)).map(r=>r.auth_id);if(selectedIDs.length===0){bar.hidden=true;return}bar.hidden=false;const count=bar.querySelector('[data-purpose="bulk-selection-count"]');if(count)count.textContent=t('inventory.bulk.selected',{count:selectedIDs.length});const source=bar.querySelector('[data-purpose="bulk-source-group"]');if(source)source.textContent=t('inventory.bulk.source',{group:inventorySourceGroupLabel(rows)})}
+function renderInventoryNotice(){const node=document.getElementById('inventoryNotice');if(!node)return;const warnings=(STATUS.group_warnings||[]).concat(STATUS.group_reference_warnings||[],STATUS.identity_warnings||[]);const state=inventoryNoticeState(STATUS.inventory||{},warnings);let message='';if(state.empty){message=t('inventory.notice.empty')}else if(state.conflict){message=t('inventory.notice.conflict')}else if(state.stale){message=t('inventory.notice.stale')}if(message){node.hidden=false;node.textContent=message;node.className='notice'}else{node.hidden=true}}
+function renderInventory(){const rows=inventoryRowsFromStatus();const search=(document.querySelector('[data-purpose="inventory-search"]')||{value:''}).value||'';const facets=collectInventoryFacetSelection();const criteria={search:search,facets:facets};if(!inventoryCriteriaEqual(inventoryCriteria,criteria)){inventorySelectedIDs.clear();inventoryCriteria=criteria}renderInventoryFacets(rows,search,facets);renderInventoryRows(rows,search,facets);renderInventoryBulkBar(rows,search,facets);renderInventoryNotice()}
+function fillInventoryControlOptions(){const viewSelect=document.querySelector('[data-purpose="view-group-filter"]');if(viewSelect){const previous=viewSelect.value;viewSelect.replaceChildren();const add=(value,label)=>{const o=document.createElement('option');o.value=value;o.textContent=label;viewSelect.append(o)};add('',t('inventory.viewGroupAll'));add('ungrouped',t('inventory.group.ungrouped'));for(const group of STATUS.groups||[]){add(group.name||group.id,group.name||group.id)}if(previous)viewSelect.value=previous}const poolSelect=document.querySelector('[data-purpose="active-pool"]');if(poolSelect){const current=(STATUS.settings&&STATUS.settings.active_pool)||'all';poolSelect.replaceChildren();const add=(value,label)=>{const o=document.createElement('option');o.value=value;o.textContent=label;poolSelect.append(o)};add('all',t('inventory.pool.all'));add('ungrouped',t('inventory.pool.ungrouped'));for(const group of STATUS.groups||[]){add('group:'+group.id,group.name||group.id)}poolSelect.value=current}const target=document.getElementById('bulkTargetGroup');if(target){target.replaceChildren();const add=(value,label)=>{const o=document.createElement('option');o.value=value;o.textContent=label;target.append(o)};add('',t('inventory.group.ungrouped'));for(const group of STATUS.groups||[]){add(group.id,group.name||group.id)}}}
+function openManagementDialog(dialog){if(!dialog)return;dialog.showModal();const targetID=dialog.getAttribute('data-focus-on-open');if(targetID){const target=document.getElementById(targetID);if(target)target.focus()}}
+function openBulkConfirmation(){const dialog=document.getElementById('bulkConfirmation');if(!dialog)return;const rows=inventoryRowsFromStatus();const search=(document.querySelector('[data-purpose="inventory-search"]')||{value:''}).value||'';const facets=collectInventoryFacetSelection();const visible=inventoryFilterRows(rows,search,facets).filter(r=>inventorySelectedIDs.has(r.auth_id));if(visible.length===0)return;const target=document.getElementById('bulkTargetGroup');const set=(purpose,text)=>{const node=dialog.querySelector('[data-purpose="'+purpose+'"]');if(node)node.textContent=text};set('bulk-selection-count',t('inventory.bulk.selected',{count:visible.length}));set('bulk-source-group',t('inventory.bulk.source',{group:inventorySourceGroupLabel(rows)}));set('bulk-target-group',target&&target.selectedOptions.length?target.selectedOptions[0].textContent:t('inventory.group.ungrouped'));openManagementDialog(dialog)}
 function applyStatus(data,options){STATUS=data;statusLoaded=true;rebuildDerivedState();const shouldFillSettings=(options&&options.fillSettings)||!settingsInitialized||!settingsFocusedOrDirty();if(shouldFillSettings){fillSettings();settingsInitialized=true}renderMetrics();renderRosterLifecycle();renderAccounts(STATUS.accounts||[]);renderLogs(STATUS.logs||[]);updateProtectedVisibility();applyLocale()}
 async function refreshStatus(options){const opts=options||{};const data=await requestManagement('/status',{query:{format:'json'}});applyStatus(data,opts)}
 function startStatusPolling(){if(statusPollID)return;statusPollID=window.setInterval(()=>refreshStatus({management:true}).catch(()=>{}),15000)}
@@ -1548,15 +1820,16 @@ function renderEmptyState(){const empty=STATUS.empty_state||{};const title=empty
 function renderAccounts(accounts){const queue=document.querySelector('section.queue');if(!queue)return;queue.replaceChildren();const items=Array.isArray(accounts)?accounts:[];if(items.length===0){queue.append(renderEmptyState());return}for(const account of items){const card=node('article','card '+(STATUS.next_auth_id&&STATUS.next_auth_id===account.auth_id?'next':''));card.dataset.authId=account.auth_id||'';const top=node('div','cardTop');const identity=node('div','identity');const titleLine=node('div','titleLine');titleLine.append(node('span','title',account.alias||account.auth_id||''));if(account.group)titleLine.append(node('span','groupPill',account.group));identity.append(titleLine);const sub=node('div','sub');const code=document.createElement('code');code.textContent=account.auth_id||'';sub.append(code);identity.append(sub);if(account.tags&&account.tags.length){const tags=node('div','metaLine');for(const tag of account.tags)tags.append(node('span','chip',tag));identity.append(tags)}top.append(identity,node('span','rank','#'+(account.rank||'')));card.append(top);const badges=node('div','badges');if(STATUS.next_auth_id&&STATUS.next_auth_id===account.auth_id)badges.append(addBadge('下一优先','next'));badges.append(account.available?addBadge('可用','ok'):addBadge(labelUnavailableReason(account.unavailable_reason),'no'));const planRank=account.subscription_rank==null?'':' (rank '+account.subscription_rank+')';badges.append(addBadge(account.family||'未知类型'),addBadge('订阅：'+(account.plan_type||'未知')+planRank),addBadge('CPA 优先级 '+(account.cpa_priority||0)),addBadge('插件优先级 '+(account.scheduler_priority||0)),addBadge((currentLocale==='en'?'Active selection eligibility: ':'主动选择资格：')+(account.active_selection_eligibility||'eligible')),addBadge('熔断：'+((account.circuit&&account.circuit.label)||'')));if(account.auth_failure)badges.append(addBadge('请重新登录','no'));if(account.refresh_due_reason)badges.append(addBadge(labelDueReason(account.refresh_due_reason)));card.append(badges);const quotaList=node('div','quotaList');if(account.five_hour&&!account.five_hour.missing)quotaList.append(addQuota(account.five_hour,'5 小时额度'));if(account.long_window)quotaList.append(addQuota(account.long_window,account.long_window.label||'长额度'));card.append(quotaList);const kv=node('div','kv');addKV(kv,'策略值',account.strategy_known?account.strategy_value:(currentLocale==='en'?'Unknown':'未知'));addKV(kv,'瓶颈配额',account.bottleneck_quota&&account.bottleneck_quota.known?account.bottleneck_quota.remaining+'%':(currentLocale==='en'?'Unknown':'未知'));addKV(kv,'订阅到期',account.subscription_expires_text|| (currentLocale==='en'?'Unknown':'未知'));addKV(kv,'缓存时间',account.cache_age||'暂无');addKV(kv,'熔断计数','失败 '+((account.circuit&&account.circuit.failure_count)||0)+' / 成功 '+((account.circuit&&account.circuit.success_count)||0));addKV(kv,'主动重置',resetCreditSummary(account));if(account.status_note)addKV(kv,'调度状态',account.status_note);if(account.last_error)addKV(kv,'最后错误',account.last_error);if(account.next_retry_text)addKV(kv,'下次重试',account.next_retry_text);card.append(kv);if(account.notes||account.group_notes){const notes=node('div','noteBlock');if(account.notes)notes.append(node('div','',account.notes));if(account.group_notes)notes.append(node('div','',account.group_notes));card.append(notes)}const actions=node('div','cardActions');const refresh=node('button','ghost refreshOne','刷新额度');refresh.type='button';refresh.addEventListener('click',()=>refreshOneQuota(account.auth_id||''));const edit=node('button','secondary openEdit','编辑');edit.type='button';edit.addEventListener('click',()=>openEdit(account.auth_id||''));actions.append(refresh,edit);card.append(actions);queue.append(card)}formatLocalTimes()}
 
 async function readJSON(resp){const text=await resp.text();if(!text)return{};try{return JSON.parse(text)}catch{return{error:text}}}
+async function loadPublicStatus(){const resp=await fetch('/v0/resource/plugins/codex-quota-scheduler/status-data',{method:'GET',headers:{Accept:'application/json'}});const data=await readJSON(resp);if(!resp.ok)throw new Error(data.error||'public status unavailable');PUBLIC_STATUS=data;publicStatusLoaded=true;renderPublicStatus()}
 function authHeaders(){const input=document.getElementById('managementKey');const key=(input&&input.value||'').trim();if(!key)throw new Error(t('error.managementKeyRequired'));const name='Author'+'ization';const scheme='Bea'+'rer ';const headers={};headers[name]=key.toLowerCase().startsWith(scheme.toLowerCase())?key:scheme+key;return headers}
 async function requestManagement(path,options){const opts=options||{};const headers=authHeaders();let url=MANAGEMENT_BASE+path;if(opts.query){const params=new URLSearchParams(opts.query);url+='?'+params.toString()}const init={method:opts.method||'GET',headers};if(Object.prototype.hasOwnProperty.call(opts,'body')){headers['Content-Type']=opts.contentType||'application/json';init.body=typeof opts.body==='string'?opts.body:JSON.stringify(opts.body)}const resp=await fetch(url,init);const data=await readJSON(resp);if(!resp.ok)throw new Error(data.error||data.message||t('error.requestFailed',{status:resp.status}));return data}
 function fillSettings(){const s=STATUS.settings||{};document.getElementById('handleEnabled').checked=s.handle_enabled!==false;document.getElementById('excludeFreeAccounts').checked=s.exclude_free_accounts!==false;document.getElementById('usageFeedback').checked=s.enable_usage_feedback!==false;document.getElementById('enableResetProbe').checked=s.enable_reset_probe===true;document.getElementById('probeOnProvisionalRoster').checked=s.probe_on_provisional_roster===true;document.getElementById('monthlyMode').value=s.monthly_mode||'expiry_order';document.getElementById('selectionStrategy').value=s.selection_strategy||'';document.getElementById('subscriptionOrder').value=(s.subscription_order||[]).join(', ');document.getElementById('refreshInterval').value=s.quota_refresh_interval||'30m0s';document.getElementById('staleAfter').value=s.stale_after||'5h0m0s';document.getElementById('refreshActiveWindow').value=s.refresh_active_window||'1h0m0s';document.getElementById('refreshAfterResetDelay').value=s.refresh_after_reset_delay||'1m0s';document.getElementById('refreshRetryDelays').value=s.refresh_retry_delays||'1m0s,5m0s,15m0s';document.getElementById('refreshOnStartup').checked=s.refresh_on_startup===true;document.getElementById('maxConcurrency').value=s.max_refresh_concurrency||1;document.getElementById('circuitFailureThreshold').value=s.circuit_failure_threshold||5;document.getElementById('circuitOpenDuration').value=s.circuit_open_duration||'30m0s';document.getElementById('circuitHalfOpenSuccessThreshold').value=s.circuit_half_open_success_threshold||2;document.getElementById('maxLogEntries').value=s.max_log_entries||200;document.getElementById('logRetention').value=s.log_retention||'24h0m0s'}
 async function saveSettings(){try{if(!statusLoaded){await loadStatus();return}await requestManagement('/settings',{method:'PUT',body:collectSettingsPayload()});settingsDirty=false;showNotice(t('notice.settingsSaved'),false);await refreshStatus({management:true,fillSettings:true})}catch(error){showNotice(error.message||String(error),true)}}
 async function refreshQuota(){try{await requestManagement('/refresh',{method:'POST'});showNotice(t('notice.refreshRequested'),false);await refreshStatus({management:true});pollStatus(3,1200)}catch(error){showNotice(error.message||String(error),true)}}
 function splitTags(text){return text.split(',').map((item)=>item.trim()).filter(Boolean)}
-function openEdit(authID){if(!hasManagementKey()){showNotice(t('error.managementKeyRequired'),true);return}const account=accountsByID.get(authID)||{};editingAuthID=authID;document.getElementById('editAuthID').textContent=authID;document.getElementById('editAlias').value=account.alias||'';document.getElementById('editSchedulerPriority').value=account.scheduler_priority||0;document.getElementById('editNotes').value=account.notes||'';document.getElementById('editGroupID').value=account.group_id||'';document.getElementById('editGroupName').value=account.group||'';document.getElementById('editGroupNotes').value=account.group_notes||'';document.getElementById('editTags').value=(account.tags||[]).join(', ');editDialog.showModal()}
+function openEdit(authID){if(!hasManagementKey()){showNotice(t('error.managementKeyRequired'),true);return}const account=accountsByID.get(authID)||{};editingAuthID=authID;document.getElementById('editAuthID').textContent=authID;document.getElementById('editAlias').value=account.alias||'';document.getElementById('editSchedulerPriority').value=account.scheduler_priority||0;document.getElementById('editNotes').value=account.notes||'';document.getElementById('editTags').value=(account.tags||[]).join(', ');editDialog.showModal()}
 function fillGroupFromID(){const groupID=document.getElementById('editGroupID').value.trim();const group=groupsByID.get(groupID);if(!group)return;if(!document.getElementById('editGroupName').value.trim())document.getElementById('editGroupName').value=group.name||'';if(!document.getElementById('editGroupNotes').value.trim())document.getElementById('editGroupNotes').value=group.notes||''}
-async function saveAccountModal(){if(!editingAuthID)return;const groupID=document.getElementById('editGroupID').value.trim();const groupName=document.getElementById('editGroupName').value.trim();const groupNotes=document.getElementById('editGroupNotes').value.trim();const schedulerPriority=document.getElementById('editSchedulerPriority').valueAsNumber;if(!Number.isSafeInteger(schedulerPriority)){showNotice(t('error.schedulerPriorityInteger'),true);return}try{await requestManagement('/annotations/account',{method:'PATCH',body:{auth_id:editingAuthID,alias:document.getElementById('editAlias').value,notes:document.getElementById('editNotes').value,tags:splitTags(document.getElementById('editTags').value),group_id:groupID,scheduler_priority:schedulerPriority}});const existingGroup=groupsByID.get(groupID)||{name:'',notes:''};if(groupID&&(groupName!==existingGroup.name||groupNotes!==existingGroup.notes)){await requestManagement('/annotations/group',{method:'PATCH',body:{id:groupID,name:groupName,notes:groupNotes}});groupsByID.set(groupID,{name:groupName,notes:groupNotes})}showNotice(t('notice.accountSaved'),false);editDialog.close();await refreshStatus()}catch(error){showNotice(error.message||String(error),true)}}
+async function saveAccountModal(){if(!editingAuthID)return;const schedulerPriority=document.getElementById('editSchedulerPriority').valueAsNumber;if(!Number.isSafeInteger(schedulerPriority)){showNotice(t('error.schedulerPriorityInteger'),true);return}try{await requestManagement('/annotations/account',{method:'PATCH',body:{auth_id:editingAuthID,alias:document.getElementById('editAlias').value,notes:document.getElementById('editNotes').value,tags:splitTags(document.getElementById('editTags').value),scheduler_priority:schedulerPriority}});showNotice(t('notice.accountSaved'),false);editDialog.close();await refreshStatus()}catch(error){showNotice(error.message||String(error),true)}}
 async function refreshOneQuota(authID){if(!authID)return;try{await requestManagement('/refresh/account',{method:'POST',body:{auth_id:authID}});showNotice(t('notice.refreshOneRequested'),false);await refreshStatus();pollStatus(3,1200)}catch(error){showNotice(error.message||String(error),true)}}
 async function exportConfig(){try{const data=await requestManagement('/export');const blob=new Blob([JSON.stringify(data,null,2)+'\n'],{type:'application/json'});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download='codex-quota-scheduler-config.json';link.click();URL.revokeObjectURL(link.href);showNotice(t('notice.configExported'),false);await refreshLogs()}catch(error){showNotice(error.message||String(error),true)}}
 async function exportLogs(){try{await refreshStatus({management:true});const payload={plugin_id:STATUS.plugin_id||'codex-quota-scheduler',exported_at:new Date().toISOString(),logs:STATUS.logs||[]};const blob=new Blob([JSON.stringify(payload,null,2)+'\n'],{type:'application/json'});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download='codex-quota-scheduler-logs.json';link.click();URL.revokeObjectURL(link.href);showNotice(t('notice.logsExported'),false)}catch(error){showNotice(error.message||String(error),true)}}
@@ -1579,12 +1852,11 @@ document.getElementById('importFile').addEventListener('change',(event)=>importC
 document.getElementById('saveAccount').addEventListener('click',saveAccountModal);
 settingsPanel.addEventListener('input',()=>{settingsDirty=true});
 settingsPanel.addEventListener('change',()=>{settingsDirty=true});
-document.getElementById('editGroupID').addEventListener('input',fillGroupFromID);
-document.getElementById('editGroupID').addEventListener('blur',fillGroupFromID);
 document.getElementById('closeDialog').addEventListener('click',()=>editDialog.close());
 document.getElementById('cancelEdit').addEventListener('click',()=>editDialog.close());
 for(const button of document.querySelectorAll('.openEdit')){button.addEventListener('click',()=>openEdit(button.dataset.authId||''))}
 for(const button of document.querySelectorAll('.refreshOne')){button.addEventListener('click',()=>refreshOneQuota(button.dataset.authId||''))}
+loadPublicStatus().catch(()=>{const node=document.getElementById('publicStatusSummary');if(node)node.textContent='安全配置暂时无法加载；详细数据仍需要 CPA 管理密钥。'});
 rebuildDerivedState();
 fillSettings();
 renderMetrics();

@@ -59,6 +59,7 @@ type ActiveRoster struct {
 	LifecycleRevision uint64
 	Instances         []string
 	Entries           []RosterEntry
+	Inventory         []RosterEntry
 	ConfirmedAt       time.Time
 	LastSyncAt        time.Time
 	DegradedSince     time.Time
@@ -246,17 +247,18 @@ func (c *RosterController) finishSync(ctx context.Context, entries []RosterEntry
 	old := cloneActiveRoster(c.current)
 	errorCategory := rosterSyncErrorCategory(syncErr)
 	if syncErr == nil {
-		priority, ids, ok := HighestCodexTier(entries)
+		eligible := eligibleRosterEntries(entries)
+		priority, ids, ok := HighestCodexTier(eligible)
 		if !ok {
 			syncErr = errNoConfirmedCodexTier
 			errorCategory = RosterSyncErrorNoCodexTier
 		} else {
-			filtered := filterRosterEntries(entries, ids)
+			filtered := filterRosterEntries(eligible, ids)
 			generation := old.Generation
 			if !sameRoster(old, priority, filtered, ids) {
 				generation++
 			}
-			next := ActiveRoster{Capability: CapabilityA, Confirmed: true, HighestPriority: priority, Generation: generation, LifecycleRevision: old.LifecycleRevision + 1, Instances: ids, Entries: filtered, ConfirmedAt: now, LastSyncAt: now, Health: RosterHealthy, BackgroundAllowed: true}
+			next := ActiveRoster{Capability: CapabilityA, Confirmed: true, HighestPriority: priority, Generation: generation, LifecycleRevision: old.LifecycleRevision + 1, Instances: ids, Entries: filtered, Inventory: cloneRosterEntries(entries), ConfirmedAt: now, LastSyncAt: now, Health: RosterHealthy, BackgroundAllowed: true}
 			c.mu.Unlock()
 			if c.publish != nil {
 				var committed ActiveRoster
@@ -362,7 +364,14 @@ func (c *RosterController) lastSyncError() error { c.mu.Lock(); defer c.mu.Unloc
 func cloneActiveRoster(in ActiveRoster) ActiveRoster {
 	in.Instances = append([]string(nil), in.Instances...)
 	in.Entries = append([]RosterEntry(nil), in.Entries...)
+	in.Inventory = cloneRosterEntries(in.Inventory)
 	return in
+}
+
+func cloneRosterEntries(entries []RosterEntry) []RosterEntry {
+	out := make([]RosterEntry, len(entries))
+	copy(out, entries)
+	return out
 }
 
 func filterRosterEntries(entries []RosterEntry, ids []string) []RosterEntry {

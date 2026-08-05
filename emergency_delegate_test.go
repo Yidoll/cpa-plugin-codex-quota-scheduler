@@ -244,14 +244,17 @@ func TestEmergencyDecisionDiagnosticsAndManagementStatusAreSafe(t *testing.T) {
 	if fields["host_supports_emergency_delegate"] != true || fields["delegate_builtin"] != pluginapi.SchedulerBuiltinEmergencyProviderFillFirst {
 		t.Fatalf("capability/delegate diagnostics = %#v", fields)
 	}
-	if fields["oauth_stage_reason"] != "no_codex_candidates" || fields["active_pool_bypassed"] != true {
+	if fields["oauth_stage_reason"] != "no_codex_candidates" {
 		t.Fatalf("OAuth stage diagnostics = %#v", fields)
+	}
+	if _, exists := fields["active_pool_bypassed"]; exists {
+		t.Fatalf("legacy active_pool diagnostic = %#v", fields)
 	}
 	status := BuildStatusPayload(state, nil)
 	if !status.HostSupportsEmergencyDelegate || status.LastEmergencyResult == nil {
 		t.Fatalf("status emergency diagnostics = %#v", status.LastEmergencyResult)
 	}
-	if status.LastEmergencyResult.Delegate != pluginapi.SchedulerBuiltinEmergencyProviderFillFirst || status.LastEmergencyResult.OAuthStageReason != "no_codex_candidates" || !status.LastEmergencyResult.ActivePoolBypassed {
+	if status.LastEmergencyResult.Delegate != pluginapi.SchedulerBuiltinEmergencyProviderFillFirst || status.LastEmergencyResult.OAuthStageReason != "no_codex_candidates" || status.LastEmergencyResult.ActivePoolBypassed {
 		t.Fatalf("last emergency result = %#v", status.LastEmergencyResult)
 	}
 	raw, errMarshal := json.Marshal(status)

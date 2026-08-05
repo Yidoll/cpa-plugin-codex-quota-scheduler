@@ -26,9 +26,14 @@ const (
 	SelectionStrategyExpirySoon       SelectionStrategy = "expiry_soon"
 
 	FallbackFillFirst FallbackMode = "fill-first"
+
+	ActivePoolAll       = "all"
+	ActivePoolUngrouped = "ungrouped"
+	activePoolGroup     = "group:"
+	activePoolNotFound  = "active_pool_not_found"
 )
 
-var pluginVersion = "0.4.0"
+var pluginVersion = "0.5.0"
 
 type MonthlyMode string
 
@@ -38,7 +43,8 @@ type FallbackMode string
 
 type Config struct {
 	HandleEnabled        bool
-	ExcludeFreeAccounts  bool `json:"exclude_free_accounts"`
+	ExcludeFreeAccounts  bool   `json:"exclude_free_accounts"`
+	ActivePool           string `json:"active_pool"`
 	QuotaRefreshInterval time.Duration
 	// StaleAfter classifies cache age and permits pick-time recovery. It does
 	// not own a normal-refresh deadline.
@@ -78,6 +84,7 @@ type registrationCapabilities struct {
 type rawConfig struct {
 	HandleEnabled                   *bool    `yaml:"handle_enabled"`
 	ExcludeFreeAccounts             *bool    `yaml:"exclude_free_accounts"`
+	ActivePool                      string   `yaml:"active_pool"`
 	QuotaRefreshInterval            string   `yaml:"quota_refresh_interval"`
 	StaleAfter                      string   `yaml:"stale_after"`
 	MonthlyMode                     string   `yaml:"monthly_mode"`
@@ -107,12 +114,15 @@ type strategyConfigOverlay struct {
 	SelectionStrategy          SelectionStrategy
 	SubscriptionOrderPresent   bool
 	SubscriptionOrder          []string
+	ActivePoolPresent          bool
+	ActivePool                 string
 }
 
 func DefaultConfig() Config {
 	return Config{
 		HandleEnabled:                   true,
 		ExcludeFreeAccounts:             true,
+		ActivePool:                      ActivePoolAll,
 		QuotaRefreshInterval:            30 * time.Minute,
 		StaleAfter:                      5 * time.Hour,
 		MonthlyMode:                     MonthlyModeExpiryOrder,
@@ -135,7 +145,7 @@ func DefaultConfig() Config {
 
 func (cfg *Config) UnmarshalJSON(raw []byte) error {
 	type configJSON Config
-	decoded := configJSON{ExcludeFreeAccounts: true}
+	decoded := configJSON{ExcludeFreeAccounts: true, ActivePool: ActivePoolAll}
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		return err
 	}
@@ -145,6 +155,9 @@ func (cfg *Config) UnmarshalJSON(raw []byte) error {
 
 func NormalizeConfig(cfg Config) Config {
 	defaults := DefaultConfig()
+	if cfg.ActivePool == "" {
+		cfg.ActivePool = defaults.ActivePool
+	}
 	if cfg.QuotaRefreshInterval <= 0 {
 		cfg.QuotaRefreshInterval = defaults.QuotaRefreshInterval
 	}
@@ -196,6 +209,11 @@ func cloneConfig(cfg Config) Config {
 
 func ValidateConfig(cfg Config) (Config, error) {
 	cfg = NormalizeConfig(cfg)
+	activePool, err := normalizeActivePool(cfg.ActivePool)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ActivePool = activePool
 	switch cfg.SelectionStrategy {
 	case "", SelectionStrategyQuotaHigh, SelectionStrategyQuotaLow, SelectionStrategySubscriptionHigh, SelectionStrategySubscriptionLow, SelectionStrategyExpirySoon:
 	default:
@@ -244,6 +262,9 @@ func decodeConfig(raw []byte, validateStrategy bool) (Config, error) {
 	}
 	if decoded.ExcludeFreeAccounts != nil {
 		cfg.ExcludeFreeAccounts = *decoded.ExcludeFreeAccounts
+	}
+	if decoded.ActivePool != "" {
+		cfg.ActivePool = decoded.ActivePool
 	}
 	if decoded.QuotaRefreshInterval != "" {
 		d, err := time.ParseDuration(decoded.QuotaRefreshInterval)
@@ -425,6 +446,17 @@ func decodeStrategyConfigOverlay(raw []byte) (strategyConfigOverlay, error) {
 				return strategyConfigOverlay{}, fmt.Errorf("subscription_order: %w", err)
 			}
 			overlay.SubscriptionOrder = append([]string(nil), order...)
+		case "active_pool":
+			overlay.ActivePoolPresent = true
+			if value.Tag == "!!null" {
+				overlay.ActivePool = ""
+				continue
+			}
+			var pool string
+			if err := value.Decode(&pool); err != nil {
+				return strategyConfigOverlay{}, fmt.Errorf("active_pool: %w", err)
+			}
+			overlay.ActivePool = pool
 		}
 	}
 	return overlay, nil
@@ -440,6 +472,9 @@ func applyStrategyConfigOverlay(base Config, overlay strategyConfigOverlay) (Con
 	}
 	if overlay.SubscriptionOrderPresent {
 		cfg.SubscriptionOrder = append([]string(nil), overlay.SubscriptionOrder...)
+	}
+	if overlay.ActivePoolPresent {
+		cfg.ActivePool = overlay.ActivePool
 	}
 	return ValidateConfig(cfg)
 }
@@ -489,6 +524,28 @@ func validateQuotaEndpoint(raw string) (string, error) {
 		return "", fmt.Errorf("quota_endpoint must be %s", chatGPTQuotaEndpoint)
 	}
 	return endpoint, nil
+}
+
+func normalizeActivePool(raw string) (string, error) {
+	value := raw
+	if value == "" {
+		return ActivePoolAll, nil
+	}
+	if strings.TrimSpace(value) != value {
+		return "", fmt.Errorf("active_pool must be %q, %q, or %q", ActivePoolAll, ActivePoolUngrouped, activePoolGroup+"<id>")
+	}
+	switch value {
+	case ActivePoolAll, ActivePoolUngrouped:
+		return value, nil
+	}
+	if strings.HasPrefix(value, activePoolGroup) {
+		groupID := strings.TrimPrefix(value, activePoolGroup)
+		if groupID == "" || strings.TrimSpace(groupID) != groupID {
+			return "", fmt.Errorf("active_pool must be %q, %q, or %q", ActivePoolAll, ActivePoolUngrouped, activePoolGroup+"<id>")
+		}
+		return value, nil
+	}
+	return "", fmt.Errorf("active_pool must be %q, %q, or %q", ActivePoolAll, ActivePoolUngrouped, activePoolGroup+"<id>")
 }
 
 func PluginRegistration() registration {

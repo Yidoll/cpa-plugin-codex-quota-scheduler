@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -47,7 +48,7 @@ func TestDisabledNonOAuthEntryDoesNotBlockRosterPublication(t *testing.T) {
 	}
 }
 
-func TestABIHostAuthListerFiltersIneligibleEntries(t *testing.T) {
+func TestABIHostAuthListerRetainsCompleteCodexEntriesAndExcludesMissing(t *testing.T) {
 	tests := []struct {
 		name    string
 		file    string
@@ -56,8 +57,8 @@ func TestABIHostAuthListerFiltersIneligibleEntries(t *testing.T) {
 	}{
 		{name: "eligible", file: `{"id":"eligible","auth_index":"idx","provider":"codex","priority":7}`, wantID: "eligible", wantLen: 1},
 		{name: "missing priority defaults to zero", file: `{"id":"default-priority","auth_index":"idx","provider":"codex"}`, wantID: "default-priority", wantLen: 1},
-		{name: "disabled", file: `{"id":"disabled","auth_index":"idx","provider":"codex","disabled":true}`},
-		{name: "unavailable", file: `{"id":"unavailable","auth_index":"idx","provider":"codex","unavailable":true}`},
+		{name: "disabled", file: `{"id":"disabled","auth_index":"idx","provider":"codex","disabled":true}`, wantID: "disabled", wantLen: 1},
+		{name: "unavailable", file: `{"id":"unavailable","auth_index":"idx","provider":"codex","unavailable":true}`, wantID: "unavailable", wantLen: 1},
 		{name: "missing id", file: `{"auth_index":"idx","provider":"codex"}`},
 		{name: "missing auth index", file: `{"id":"missing-index","provider":"codex"}`},
 		{name: "non codex", file: `{"id":"claude","auth_index":"idx","provider":"claude"}`},
@@ -79,10 +80,16 @@ func TestABIHostAuthListerFiltersIneligibleEntries(t *testing.T) {
 				return
 			}
 			if entries[0].ID != tt.wantID || entries[0].AuthIndex == "" || entries[0].Priority == nil {
-				t.Fatalf("entry = %#v, want eligible %q", entries[0], tt.wantID)
+				t.Fatalf("entry = %#v, want retained codex entry %q", entries[0], tt.wantID)
 			}
 			if tt.name == "missing priority defaults to zero" && *entries[0].Priority != 0 {
 				t.Fatalf("priority = %d, want 0", *entries[0].Priority)
+			}
+			if tt.name == "disabled" && !entries[0].Disabled {
+				t.Fatalf("disabled entry lost Disabled flag: %#v", entries[0])
+			}
+			if tt.name == "unavailable" && !entries[0].Unavailable {
+				t.Fatalf("unavailable entry lost Unavailable flag: %#v", entries[0])
 			}
 		})
 	}
@@ -208,8 +215,16 @@ func TestRosterFilterSummaryIsAggregateAndNonSensitive(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := RosterFilterSummary{Received: 6, Eligible: 1, ExcludedNonCodex: 1, ExcludedDisabled: 1, ExcludedUnavailable: 1, ExcludedMissingID: 1, ExcludedMissingIndex: 1}
-	if got != want || len(entries) != 1 || entries[0].ID != "active" {
-		t.Fatalf("summary=%#v entries=%#v, want %#v and one active", got, entries, want)
+	if got != want {
+		t.Fatalf("summary=%#v, want %#v", got, want)
+	}
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		ids = append(ids, entry.ID)
+	}
+	sort.Strings(ids)
+	if !reflect.DeepEqual(ids, []string{"SECRET_DISABLED_ID", "active", "unavailable"}) {
+		t.Fatalf("entries = %v, want complete protected codex entries", ids)
 	}
 	raw, err := json.Marshal(got)
 	if err != nil {

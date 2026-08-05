@@ -43,6 +43,7 @@ const (
 type AccountView struct {
 	ID                    string
 	AuthIndex             string
+	GroupID               string
 	Instance              AuthInstanceID
 	PluginPriority        int
 	Family                AccountFamily
@@ -148,13 +149,14 @@ func selectAccountSkipping(snapshot SchedulerSnapshot, candidates []Candidate, n
 		result.Fallback = snapshot.Fallback == FallbackFillFirst
 		return result
 	}
-	planEligible, planFilterContext, activeSelectionCount := planEligibility(snapshot, eligible)
+	selection := eligible
+	planEligible, planFilterContext, activeSelectionCount := planEligibility(snapshot, selection)
 	result.PlanFilterContext = planFilterContext
 	result.ActiveSelectionCount = activeSelectionCount
 	byClass := map[AvailabilityClass][]AccountView{Preferred: {}, Opportunistic: {}}
-	seen := make(map[string]struct{}, len(eligible))
+	seen := make(map[string]struct{}, len(selection))
 	for _, a := range snapshot.Accounts {
-		if _, ok := eligible[a.ID]; !ok {
+		if _, ok := selection[a.ID]; !ok {
 			continue
 		}
 		seen[a.ID] = struct{}{}
@@ -177,7 +179,7 @@ func selectAccountSkipping(snapshot SchedulerSnapshot, candidates []Candidate, n
 			result.Unavailable = append(result.Unavailable, SelectionUnavailable{AuthID: a.ID, Reason: selectionUnavailableReason(a, now)})
 		}
 	}
-	for authID := range eligible {
+	for authID := range selection {
 		if _, ok := seen[authID]; !ok {
 			result.Unavailable = append(result.Unavailable, SelectionUnavailable{AuthID: authID, Reason: "unknown_account"})
 		}

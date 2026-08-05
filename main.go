@@ -53,6 +53,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -103,12 +104,16 @@ func (l ABIHostAuthLister) ListHostAuths(ctx context.Context) ([]RosterEntry, er
 	}
 	var response struct {
 		Files []struct {
-			ID          string `json:"id"`
-			AuthIndex   string `json:"auth_index"`
-			Provider    string `json:"provider"`
-			Priority    *int   `json:"priority"`
-			Disabled    bool   `json:"disabled"`
-			Unavailable bool   `json:"unavailable"`
+			ID            string `json:"id"`
+			AuthIndex     string `json:"auth_index"`
+			Provider      string `json:"provider"`
+			Priority      *int   `json:"priority"`
+			Disabled      bool   `json:"disabled"`
+			Unavailable   bool   `json:"unavailable"`
+			AccountType   string `json:"account_type"`
+			Status        string `json:"status"`
+			StatusMessage string `json:"status_message"`
+			Email         string `json:"email"`
 		} `json:"files"`
 	}
 	if err := json.Unmarshal(result, &response); err != nil {
@@ -117,23 +122,25 @@ func (l ABIHostAuthLister) ListHostAuths(ctx context.Context) ([]RosterEntry, er
 	summary := RosterFilterSummary{Received: len(response.Files)}
 	entries := make([]RosterEntry, 0, len(response.Files))
 	for _, file := range response.Files {
-		id, authIndex, reason := normalizeEligibleCodexAuth(file.ID, file.AuthIndex, file.Provider, file.Disabled, file.Unavailable)
-		switch reason {
-		case HostAuthExcludedNonCodex:
+		if !strings.EqualFold(strings.TrimSpace(file.Provider), "codex") {
 			summary.ExcludedNonCodex++
 			continue
-		case HostAuthExcludedDisabled:
-			summary.ExcludedDisabled++
-			continue
-		case HostAuthExcludedUnavailable:
-			summary.ExcludedUnavailable++
-			continue
-		case HostAuthExcludedMissingID:
+		}
+		id := strings.TrimSpace(file.ID)
+		authIndex := strings.TrimSpace(file.AuthIndex)
+		if id == "" {
 			summary.ExcludedMissingID++
 			continue
-		case HostAuthExcludedMissingIndex:
+		}
+		if authIndex == "" {
 			summary.ExcludedMissingIndex++
 			continue
+		}
+		if file.Disabled {
+			summary.ExcludedDisabled++
+		}
+		if file.Unavailable {
+			summary.ExcludedUnavailable++
 		}
 		priority := file.Priority
 		if priority == nil {
@@ -141,12 +148,20 @@ func (l ABIHostAuthLister) ListHostAuths(ctx context.Context) ([]RosterEntry, er
 			priority = &defaultPriority
 		}
 		entries = append(entries, RosterEntry{
-			ID:        id,
-			AuthIndex: authIndex,
-			Provider:  "codex",
-			Priority:  priority,
+			ID:            id,
+			AuthIndex:     authIndex,
+			Provider:      "codex",
+			Priority:      priority,
+			AccountType:   strings.TrimSpace(file.AccountType),
+			Status:        strings.TrimSpace(file.Status),
+			StatusMessage: strings.TrimSpace(file.StatusMessage),
+			Email:         strings.TrimSpace(file.Email),
+			Disabled:      file.Disabled,
+			Unavailable:   file.Unavailable,
 		})
-		summary.Eligible++
+		if !file.Disabled && !file.Unavailable {
+			summary.Eligible++
+		}
 	}
 	if l.observe != nil {
 		l.observe(summary)

@@ -8,18 +8,22 @@ import (
 	"testing"
 )
 
-func TestResolveAnnotationKeyPrefersAuthIDThenChatGPTAccountID(t *testing.T) {
+func TestResolveAnnotationKeyPrefersChatGPTAccountIDThenAuthID(t *testing.T) {
 	acct := AccountState{AuthID: "auth-1", ChatGPTAccountID: "acct-1", Email: "a@example.com"}
-	if got := ResolveAnnotationKey(acct); got != "auth:auth-1" {
-		t.Fatalf("key = %q, want auth:auth-1", got)
-	}
-	acct.AuthID = ""
 	if got := ResolveAnnotationKey(acct); got != "chatgpt:acct-1" {
 		t.Fatalf("key = %q, want chatgpt:acct-1", got)
 	}
 	acct.ChatGPTAccountID = ""
+	if got := ResolveAnnotationKey(acct); got != "auth:auth-1" {
+		t.Fatalf("key = %q, want auth:auth-1", got)
+	}
+	acct.AuthID = ""
 	if got := ResolveAnnotationKey(acct); got != "email:a@example.com" {
 		t.Fatalf("key = %q, want email:a@example.com", got)
+	}
+	acct.Email = "  A@Example.COM  "
+	if got := ResolveAnnotationKey(acct); got != "email:a@example.com" {
+		t.Fatalf("normalized key = %q, want email:a@example.com", got)
 	}
 }
 
